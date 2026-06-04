@@ -58,7 +58,7 @@
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition/><RowDefinition/><RowDefinition/>
-                                <RowDefinition/><RowDefinition/>
+                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
 
                             <Label Grid.Row="0" Grid.Column="0" Content="Häufigkeit (pro Min)"/>
@@ -85,6 +85,16 @@
                             <Slider Grid.Row="4" Grid.Column="1" x:Name="AglSlider" Minimum="0" Maximum="10000" Value="1500"
                                     ValueChanged="AglSlider_Changed" VerticalAlignment="Center"/>
                             <TextBlock Grid.Row="4" Grid.Column="2" x:Name="AglVal" Text="1500" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="5" Grid.Column="0" Content="Deep-Blackout min (s)"/>
+                            <Slider Grid.Row="5" Grid.Column="1" x:Name="BlackMinSlider" Minimum="2" Maximum="60" Value="8"
+                                    ValueChanged="BlackSlider_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="5" Grid.Column="2" x:Name="BlackMinVal" Text="8" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="6" Grid.Column="0" Content="Deep-Blackout max (s)"/>
+                            <Slider Grid.Row="6" Grid.Column="1" x:Name="BlackMaxSlider" Minimum="2" Maximum="120" Value="25"
+                                    ValueChanged="BlackSlider_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="6" Grid.Column="2" x:Name="BlackMaxVal" Text="25" VerticalAlignment="Center"/>
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
@@ -95,6 +105,32 @@
                             <Button Content="Zufällig" Click="RandomSeed_Click"/>
                             <Button Content="Sichtungen exportieren" Click="ExportLog_Click"/>
                         </StackPanel>
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- Lights (experimental) -->
+                <GroupBox Header="LICHTER (experimentell)">
+                    <StackPanel>
+                        <CheckBox x:Name="LightsChk" Content="Lichter aktiv" IsChecked="True"
+                                  Checked="Lights_Changed" Unchecked="Lights_Changed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Label Content="SimObject-Titel:" VerticalAlignment="Center"/>
+                            <TextBox x:Name="LightTitleBox" Width="240" Margin="4" Background="{StaticResource Panel}"
+                                     Foreground="{StaticResource Text}" TextChanged="LightTitle_Changed"
+                                     ToolTip="Exakter Titel eines vorhandenen SimObjects (siehe README). Leer = Lichter aus."/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Label Content="Anzahl:" VerticalAlignment="Center"/>
+                            <Slider x:Name="LightCountSlider" Minimum="1" Maximum="6" Value="2" Width="160"
+                                    IsSnapToTickEnabled="True" TickFrequency="1"
+                                    ValueChanged="LightCount_Changed" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="LightCountVal" Text="2" VerticalAlignment="Center" Margin="6,0"/>
+                        </StackPanel>
+                        <WrapPanel Margin="0,4,0,0">
+                            <Button Content="Test: Tic-Tac" Click="TestLightTicTac_Click"/>
+                            <Button Content="Test: Wingman" Click="TestLightWingman_Click"/>
+                            <Button Content="Test: Pop-up" Click="TestLightPopup_Click"/>
+                        </WrapPanel>
                     </StackPanel>
                 </GroupBox>
             </StackPanel>

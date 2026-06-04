@@ -15,6 +15,7 @@ public partial class MainWindow : Window
 {
     private SimConnectClient? _sim;
     private ElectricalDisruptor? _disruptor;
+    private LightChoreographer? _lights;
     private AudioEngine? _audio;
     private EncounterDirector? _director;
     private Logbook? _logbook;
@@ -35,7 +36,8 @@ public partial class MainWindow : Window
         _audio = new AudioEngine();
         _logbook = new Logbook();
         _disruptor = new ElectricalDisruptor(_sim, Trace);
-        _director = new EncounterDirector(_sim, _disruptor, _audio, _logbook, Trace);
+        _lights = new LightChoreographer(_sim, Trace);
+        _director = new EncounterDirector(_sim, _disruptor, _lights, _audio, _logbook, Trace);
 
         _sim.Connected += () => { SimStatus.Text = " CONNECTED"; SimStatus.Foreground = (System.Windows.Media.Brush)FindResource("Accent"); };
         _sim.Disconnected += () => { SimStatus.Text = " DISCONNECTED"; SimStatus.Foreground = (System.Windows.Media.Brush)FindResource("Warn"); };
@@ -150,7 +152,41 @@ public partial class MainWindow : Window
         _director.Intensity = IntensitySlider.Value;
         _director.MinAglFeet = AglSlider.Value;
         _director.RealismLock = RealismChk.IsChecked == true;
+        _director.BlackoutMinSec = BlackMinSlider.Value;
+        _director.BlackoutMaxSec = BlackMaxSlider.Value;
+        _director.LightsEnabled = LightsChk.IsChecked == true;
+        _director.LightObjectTitle = LightTitleBox.Text;
+        _director.LightCount = (int)LightCountSlider.Value;
     }
+
+    private void BlackSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (BlackMinVal != null) BlackMinVal.Text = BlackMinSlider.Value.ToString("0", CultureInfo.InvariantCulture);
+        if (BlackMaxVal != null) BlackMaxVal.Text = BlackMaxSlider.Value.ToString("0", CultureInfo.InvariantCulture);
+        if (_director == null) return;
+        _director.BlackoutMinSec = BlackMinSlider.Value;
+        _director.BlackoutMaxSec = BlackMaxSlider.Value;
+    }
+
+    private void Lights_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) _director.LightsEnabled = LightsChk.IsChecked == true;
+    }
+
+    private void LightTitle_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_director != null) _director.LightObjectTitle = LightTitleBox.Text;
+    }
+
+    private void LightCount_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LightCountVal != null) LightCountVal.Text = ((int)LightCountSlider.Value).ToString();
+        if (_director != null) _director.LightCount = (int)LightCountSlider.Value;
+    }
+
+    private void TestLightTicTac_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.TicTac, 12);
+    private void TestLightWingman_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.Wingman, 12);
+    private void TestLightPopup_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.PopUp, 12);
 
     private void RandomChk_Changed(object sender, RoutedEventArgs e) =>
         _director?.SetRandomMode(RandomChk.IsChecked == true);

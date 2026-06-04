@@ -12,15 +12,21 @@ public enum DisruptionKind
     Blackout,
     /// <summary>Rapid on/off/on/off flickering ("stutter").</summary>
     Stutter,
+    /// <summary>Everything off (battery + both alternators + avionics); timing is
+    /// decoupled from the encounter (own start delay and duration).</summary>
+    DeepBlackout,
 }
 
 public sealed record DisruptionPlan
 {
     public DisruptionKind Kind { get; init; } = DisruptionKind.Blackout;
     public TimeSpan Duration { get; init; } = TimeSpan.FromSeconds(6);
+    /// <summary>Wait this long after the encounter begins before cutting power
+    /// (lets the blackout begin out of sync with the encounter).</summary>
+    public TimeSpan StartDelay { get; init; } = TimeSpan.Zero;
     /// <summary>For Stutter: length of a single off- or on-phase.</summary>
     public TimeSpan StutterStep { get; init; } = TimeSpan.FromMilliseconds(350);
-    /// <summary>Also cut the alternator (engine generator), not just the battery.</summary>
+    /// <summary>Also cut the alternator(s) / engine generators.</summary>
     public bool CutAlternator { get; init; } = true;
     /// <summary>Also kill avionics master (instrument screens) where supported.</summary>
     public bool CutAvionics { get; init; } = true;
@@ -32,8 +38,10 @@ public sealed record DisruptionPlan
 /// events, so we track a believed on/off state (seeded from the live SimVar)
 /// and toggle toward the target — and always restore to ON in a finally block.
 ///
-/// Whether anything visibly fails depends on the aircraft model (study-level
-/// aircraft may ignore these events); that is expected and documented.
+/// Whether anything visibly fails depends on the aircraft model: glass-cockpit
+/// / study-level aircraft (e.g. the Vision Jet) keep essential buses powered
+/// and may barely react. That is expected; DeepBlackout maximises the attempt
+/// by also cutting both alternators and the avionics master.
 /// </summary>
 public sealed class ElectricalDisruptor
 {
@@ -42,7 +50,8 @@ public sealed class ElectricalDisruptor
 
     // Believed state of each channel (true = on).
     private bool _battery = true;
-    private bool _alternator = true;
+    private bool _alt1 = true;
+    private bool _alt2 = true;
     private bool _avionics = true;
 
     public bool IsActive { get; private set; }
@@ -62,16 +71,26 @@ public sealed class ElectricalDisruptor
         SeedFromSim();
         try
         {
+            if (plan.StartDelay > TimeSpan.Zero)
+                await Task.Delay(plan.StartDelay, ct);
+
             switch (plan.Kind)
             {
                 case DisruptionKind.Blackout:
-                    _log?.Invoke($"Electrical blackout for {plan.Duration.TotalSeconds:0.#}s.");
+                    _log?.Invoke($"Blackout for {plan.Duration.TotalSeconds:0.#}s.");
                     SetPower(false, plan);
                     await Task.Delay(plan.Duration, ct);
                     break;
 
+                case DisruptionKind.DeepBlackout:
+                    _log?.Invoke($"DEEP blackout: all power off for {plan.Duration.TotalSeconds:0.#}s "
+                                 + $"(delay {plan.StartDelay.TotalSeconds:0.#}s).");
+                    SetAllPower(false);
+                    await Task.Delay(plan.Duration, ct);
+                    break;
+
                 case DisruptionKind.Stutter:
-                    _log?.Invoke($"Electrical stutter for {plan.Duration.TotalSeconds:0.#}s.");
+                    _log?.Invoke($"Stutter for {plan.Duration.TotalSeconds:0.#}s.");
                     var until = DateTime.UtcNow + plan.Duration;
                     var on = true;
                     while (DateTime.UtcNow < until)
@@ -90,7 +109,7 @@ public sealed class ElectricalDisruptor
         finally
         {
             // Failsafe: power always comes back on, even on cancel/exception.
-            RestorePower(plan);
+            RestorePower();
             IsActive = false;
         }
     }
@@ -100,24 +119,33 @@ public sealed class ElectricalDisruptor
     {
         var s = _sim.State;
         _battery = s.MasterBattery > 0.5;
-        _alternator = s.MasterAlternator > 0.5;
-        // No reliable per-frame avionics SimVar mapped; assume on at start.
+        _alt1 = s.MasterAlternator > 0.5;
+        _alt2 = true;     // no reliable per-frame SimVar mapped; assume on
         _avionics = true;
     }
 
     private void SetPower(bool on, DisruptionPlan plan)
     {
         SetBattery(on);
-        if (plan.CutAlternator) SetAlternator(on);
+        if (plan.CutAlternator) SetAlt1(on);
         if (plan.CutAvionics) SetAvionics(on);
     }
 
+    private void SetAllPower(bool on)
+    {
+        SetBattery(on);
+        SetAlt1(on);
+        SetAlt2(on);
+        SetAvionics(on);
+    }
+
     /// <summary>Restore is forced regardless of believed state.</summary>
-    private void RestorePower(DisruptionPlan plan)
+    private void RestorePower()
     {
         if (!_battery) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_MASTER_BATTERY); _battery = true; }
-        if (plan.CutAlternator && !_alternator) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR1); _alternator = true; }
-        if (plan.CutAvionics && !_avionics) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_AVIONICS_MASTER); _avionics = true; }
+        if (!_alt1) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR1); _alt1 = true; }
+        if (!_alt2) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR2); _alt2 = true; }
+        if (!_avionics) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_AVIONICS_MASTER); _avionics = true; }
         _log?.Invoke("Power restored.");
     }
 
@@ -128,11 +156,18 @@ public sealed class ElectricalDisruptor
         _battery = on;
     }
 
-    private void SetAlternator(bool on)
+    private void SetAlt1(bool on)
     {
-        if (_alternator == on) return;
+        if (_alt1 == on) return;
         _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR1);
-        _alternator = on;
+        _alt1 = on;
+    }
+
+    private void SetAlt2(bool on)
+    {
+        if (_alt2 == on) return;
+        _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR2);
+        _alt2 = on;
     }
 
     private void SetAvionics(bool on)

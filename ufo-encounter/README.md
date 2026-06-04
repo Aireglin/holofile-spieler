@@ -4,12 +4,12 @@ Ein kleines Windows-Tool, das über **SimConnect** zufällige „UFO-Begegnungen
 im Microsoft Flight Simulator 2024 inszeniert — angelehnt an wiederkehrende
 Pilot-/UAP-Berichte.
 
-> **Status: MVP (Schritt 1).** Enthalten sind **Elektronikstörungen**
-> (Instrumentenausfall über den „Generatoren-Trick"), ein synthetisiertes
-> **dumpfes Summen**, sowie die komplette **UI** mit Test-Buttons, Slidern,
-> Zufallsmodus, Realismus-Lock, Seed und Sichtungs-Logbuch.
-> Die **Licht-Choreografie** (tanzende Lichter via gespawnten SimObjects)
-> kommt in Schritt 2 und dockt an dieselben Szenario-Presets an.
+> **Status: V2.** Enthalten sind **Elektronikstörungen** (Instrumentenausfall
+> über den „Generatoren-Trick", inkl. **Total-Blackout** mit zeitlich
+> entkoppeltem Wiedereinschalten), ein synthetisiertes **dumpfes Summen**, die
+> **Licht-Choreografie** (tanzende Licht-SimObjects, *experimentell*) sowie die
+> komplette **UI** mit Test-Buttons, Slidern, Zufallsmodus, Realismus-Lock,
+> Seed und Sichtungs-Logbuch.
 
 ## Was es kann
 
@@ -17,10 +17,14 @@ Pilot-/UAP-Berichte.
   (Wingman), Fly-by, Pulk-Formation, Pop-up & Verschwinden, RB-47 (E-Störung).
 - **Test-Buttons** für jedes Szenario *und* für Einzel-Effekte
   (Blackout / Stutter / Hum) — alles auf Abruf.
-- **Instrumentenausfall** über `TOGGLE_MASTER_BATTERY`, `TOGGLE_ALTERNATOR1`,
-  `TOGGLE_AVIONICS_MASTER`. Wahlweise durchgehender **Blackout** oder
-  **Stutter** (an/aus/an/aus). Strom wird **garantiert** wieder eingeschaltet
-  (auch bei Stop/Absturz/Beenden → Failsafe).
+- **Instrumentenausfall** über `TOGGLE_MASTER_BATTERY`, `TOGGLE_ALTERNATOR1/2`,
+  `TOGGLE_AVIONICS_MASTER`. Modi: **Blackout**, **Stutter** (an/aus/an/aus) und
+  **Total-Blackout** (alles aus; Strom kommt **zeitlich entkoppelt** vom
+  Encounter zurück, eigene Zufallsdauer via Slider). Strom wird **garantiert**
+  wieder eingeschaltet (auch bei Stop/Absturz/Beenden → Failsafe).
+- **Licht-Choreografie** *(experimentell)*: spawnt Licht-SimObjects und lässt
+  sie relativ zum Flugzeug tanzen — Muster **Tic-Tac, Wingman, Fly-by,
+  Formation, Pop-up**. Braucht einen gültigen SimObject-Titel (s. u.).
 - **Dumpfes Summen** (in-memory synthetisiert, keine Audiodateien nötig).
 - **Zufalls- oder Manuell-Modus**: Häufigkeit, Dauer (min/max) und Intensität
   per Slider; oder Encounter gezielt per Knopfdruck.
@@ -30,9 +34,32 @@ Pilot-/UAP-Berichte.
 - **Logbuch**: jede Begegnung landet in `sightings.csv` (Zeit, Position, AGL).
 
 > ⚠️ Ob der Instrumentenausfall sichtbar wird, hängt vom **Flugzeugmodell** ab.
-> MSFS 2024 stellt zuverlässig nur `TOGGLE_*`-Events bereit, und manche
-> (Study-Level-)Flieger ignorieren sie. Das Tool toleriert das und stellt den
-> Strom in jedem Fall wieder her.
+> Glascockpit-/Study-Flieger (z. B. **Vision Jet**) halten essentielle Busse mit
+> Batterie-Backup am Leben und reagieren kaum — das ist eine Sim-Grenze, kein
+> Bug. Der **Total-Blackout** maximiert den Versuch (Batterie + beide
+> Generatoren + Avionik). Am deutlichsten wirkt es bei einfachen Fliegern
+> (z. B. Cessna 172). Der Strom kommt in jedem Fall garantiert wieder.
+
+## Lichter: SimObject-Titel finden (experimentell)
+
+Die Lichter werden als **SimObjects** in den Sim gespawnt. SimConnect braucht
+dafür den **exakten Titel** eines vorhandenen Objekts — der variiert je nach
+Installation, deshalb ist das Feld in der UI leer (= Lichter aus), bis du einen
+Titel einträgst.
+
+So findest du einen funktionierenden Titel:
+
+1. In MSFS **Developer Mode** an → Menü **Windows → Behaviors** bzw.
+   **AI/Traffic**; oder die Datei-Titel in deinen Aircraft-Ordnern ansehen
+   (`aircraft.cfg`, Eintrag `title = ...` unter `[FLTSIM.x]`).
+2. Trage den Titel **exakt** (Groß/Klein, Leerzeichen) ins Feld
+   **„SimObject-Titel"** ein, z. B. der Titel eines kleinen Flugzeugs.
+3. Auf **„Test: Pop-up"** klicken. Erscheint nichts, steht im Log unten eine
+   `SimConnect exception` (meist ein falscher Titel) → anderen Titel probieren.
+
+> Tipp: Nachts liest sich ein kleines Flugzeug mit Lichtern bereits als
+> „tanzendes Licht". Sag mir, welche Titel bei dir vorhanden sind, dann stelle
+> ich einen sinnvollen Default ein.
 
 ## Voraussetzungen
 
@@ -90,15 +117,15 @@ ufo-encounter/
    ├─ Encounters/
    │  ├─ EncounterScenario.cs    # Preset-Katalog (Reports)
    │  ├─ EncounterDirector.cs    # Dirigent: Auswahl, Timing, Random, Realism-Lock
-   │  └─ ElectricalDisruptor.cs  # Blackout/Stutter + garantierter Restore
+   │  ├─ ElectricalDisruptor.cs  # Blackout/Stutter/Deep-Blackout + garant. Restore
+   │  └─ LightChoreographer.cs   # spawnt & animiert Licht-SimObjects (experimentell)
    ├─ Audio/AudioEngine.cs       # synthetisiertes Summen (WAV in-memory)
    └─ Util/Logbook.cs            # Sichtungs-CSV
 ```
 
-## Roadmap (Schritt 2+)
+## Roadmap
 
-- **LightChoreographer**: Licht-SimObjects spawnen und relativ zum Flugzeug
-  „tanzen" lassen (Tic-Tac-Sprünge, Wingman-Halten, Fly-by, Pulk-Formation),
-  Tag & Nacht.
+- **Lichter kalibrieren**: sinnvollen Default-SimObject-Titel + ggf. ein
+  eigenes, lichtemittierendes Modell mitliefern; Lichtfarbe/Helligkeit.
 - Joystick-/Hotkey-Bindung für „Encounter jetzt" und Panik-Stop.
 - Sichtungsbericht-Export als formatiertes PDF/Markdown.

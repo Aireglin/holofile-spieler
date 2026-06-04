@@ -18,6 +18,22 @@ public struct PlaneState
     public double OnGround;         // SIM ON GROUND (bool)
     public double MasterBattery;    // ELECTRICAL MASTER BATTERY (bool)
     public double MasterAlternator; // GENERAL ENG MASTER ALTERNATOR:1 (bool)
+    public double HeadingTrue;      // PLANE HEADING DEGREES TRUE (degrees)
+}
+
+/// <summary>
+/// Position/attitude written to a spawned light SimObject. Field order MUST
+/// match the MoveObject data definition.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct ObjectPose
+{
+    public double Latitude;   // degrees
+    public double Longitude;  // degrees
+    public double AltitudeMsl;// feet
+    public double Pitch;      // degrees
+    public double Bank;       // degrees
+    public double Heading;    // degrees true
 }
 
 /// <summary>
@@ -29,11 +45,11 @@ public sealed class SimConnectClient : IDisposable
 {
     public const uint WM_USER_SIMCONNECT = 0x0402;
 
-    private enum DEFINITION { PlaneState }
-    private enum REQUEST { PlaneState }
+    private enum DEFINITION { PlaneState, MoveObject }
+    private enum REQUEST : uint { PlaneState = 0, LightBase = 1000, LightRemoveBase = 2000 }
     private enum GROUP { Priority }
 
-    // Electrical events we transmit to the user aircraft.
+    // Events we transmit to the user aircraft or to spawned objects.
     public enum SimEvent
     {
         TOGGLE_MASTER_BATTERY,
@@ -41,6 +57,10 @@ public sealed class SimConnectClient : IDisposable
         TOGGLE_ALTERNATOR2,
         TOGGLE_MASTER_ALTERNATOR,
         TOGGLE_AVIONICS_MASTER,
+        // Freeze a spawned object so the sim's physics leaves our writes alone.
+        FREEZE_LATITUDE_LONGITUDE_SET,
+        FREEZE_ALTITUDE_SET,
+        FREEZE_ATTITUDE_SET,
     }
 
     private SimConnect? _sim;
@@ -53,6 +73,8 @@ public sealed class SimConnectClient : IDisposable
     public event Action? Disconnected;
     public event Action<PlaneState>? StateUpdated;
     public event Action<string>? Log;
+    /// <summary>Raised when a spawn request returns its object id (requestId, objectId).</summary>
+    public event Action<uint, uint>? ObjectAssigned;
 
     public SimConnectClient(IntPtr hwnd) => _hwnd = hwnd;
 
@@ -67,6 +89,7 @@ public sealed class SimConnectClient : IDisposable
             _sim.OnRecvQuit += OnQuit;
             _sim.OnRecvException += OnException;
             _sim.OnRecvSimobjectData += OnSimobjectData;
+            _sim.OnRecvAssignedObjectId += OnAssignedObjectId;
 
             RegisterDataDefinition();
             RegisterEvents();
@@ -82,42 +105,111 @@ public sealed class SimConnectClient : IDisposable
 
     private void RegisterDataDefinition()
     {
-        void Add(string name, string unit) =>
+        void Read(string name, string unit) =>
             _sim!.AddToDataDefinition(DEFINITION.PlaneState, name, unit,
                 SIMCONNECT_DATATYPE.FLOAT64, 0.0f, SimConnect.SIMCONNECT_UNUSED);
 
-        Add("PLANE ALTITUDE", "feet");
-        Add("PLANE ALT ABOVE GROUND", "feet");
-        Add("PLANE LATITUDE", "degrees");
-        Add("PLANE LONGITUDE", "degrees");
-        Add("AIRSPEED INDICATED", "knots");
-        Add("SIM ON GROUND", "Bool");
-        Add("ELECTRICAL MASTER BATTERY", "Bool");
-        Add("GENERAL ENG MASTER ALTERNATOR:1", "Bool");
-
+        Read("PLANE ALTITUDE", "feet");
+        Read("PLANE ALT ABOVE GROUND", "feet");
+        Read("PLANE LATITUDE", "degrees");
+        Read("PLANE LONGITUDE", "degrees");
+        Read("AIRSPEED INDICATED", "knots");
+        Read("SIM ON GROUND", "Bool");
+        Read("ELECTRICAL MASTER BATTERY", "Bool");
+        Read("GENERAL ENG MASTER ALTERNATOR:1", "Bool");
+        Read("PLANE HEADING DEGREES TRUE", "degrees");
         _sim!.RegisterDataDefineStruct<PlaneState>(DEFINITION.PlaneState);
+
+        // Settable position/attitude for moving spawned light objects.
+        void Move(string name, string unit) =>
+            _sim!.AddToDataDefinition(DEFINITION.MoveObject, name, unit,
+                SIMCONNECT_DATATYPE.FLOAT64, 0.0f, SimConnect.SIMCONNECT_UNUSED);
+
+        Move("PLANE LATITUDE", "degrees");
+        Move("PLANE LONGITUDE", "degrees");
+        Move("PLANE ALTITUDE", "feet");
+        Move("PLANE PITCH DEGREES", "degrees");
+        Move("PLANE BANK DEGREES", "degrees");
+        Move("PLANE HEADING DEGREES TRUE", "degrees");
+        _sim!.RegisterDataDefineStruct<ObjectPose>(DEFINITION.MoveObject);
     }
 
     private void RegisterEvents()
     {
-        void Map(SimEvent e) => _sim!.MapClientEventToSimEvent(e, e.ToString());
         foreach (SimEvent e in Enum.GetValues<SimEvent>())
-            Map(e);
+            _sim!.MapClientEventToSimEvent(e, e.ToString());
     }
 
-    /// <summary>Fire a (toggle) event at the user aircraft.</summary>
-    public void Transmit(SimEvent e, uint data = 0)
+    /// <summary>Fire a (toggle/set) event at an object (default: the user aircraft).</summary>
+    public void Transmit(SimEvent e, uint data = 0, uint objectId = SimConnect.SIMCONNECT_OBJECT_ID_USER)
     {
         if (_sim == null) return;
         try
         {
-            _sim.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER, e, data,
+            _sim.TransmitClientEvent(objectId, e, data,
                 GROUP.Priority, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
         }
         catch (COMException ex)
         {
             Log?.Invoke($"Transmit {e} failed: {ex.Message}");
         }
+    }
+
+    // ---- Light SimObjects ----
+
+    /// <summary>Spawn a SimObject. <paramref name="lightIndex"/> keys the request
+    /// id so the assigned object id can be matched back.</summary>
+    public void SpawnLight(string title, ObjectPose pose, uint lightIndex)
+    {
+        if (_sim == null) return;
+        var init = new SIMCONNECT_DATA_INITPOSITION
+        {
+            Latitude = pose.Latitude,
+            Longitude = pose.Longitude,
+            Altitude = pose.AltitudeMsl,
+            Pitch = pose.Pitch,
+            Bank = pose.Bank,
+            Heading = pose.Heading,
+            OnGround = 0,
+            Airspeed = 0,
+        };
+        try
+        {
+            _sim.AICreateSimObject(title, init, (REQUEST)((uint)REQUEST.LightBase + lightIndex));
+        }
+        catch (COMException ex)
+        {
+            Log?.Invoke($"Spawn '{title}' failed: {ex.Message}");
+        }
+    }
+
+    public void MoveLight(uint objectId, ObjectPose pose)
+    {
+        if (_sim == null) return;
+        try
+        {
+            _sim.SetDataOnSimObject(DEFINITION.MoveObject, objectId,
+                SIMCONNECT_DATA_SET_FLAG.DEFAULT, pose);
+        }
+        catch (COMException) { /* object may have just been removed */ }
+    }
+
+    /// <summary>Freeze physics on a spawned object so our position writes stick.</summary>
+    public void FreezeLight(uint objectId)
+    {
+        Transmit(SimEvent.FREEZE_LATITUDE_LONGITUDE_SET, 1, objectId);
+        Transmit(SimEvent.FREEZE_ALTITUDE_SET, 1, objectId);
+        Transmit(SimEvent.FREEZE_ATTITUDE_SET, 1, objectId);
+    }
+
+    public void RemoveLight(uint objectId, uint lightIndex)
+    {
+        if (_sim == null) return;
+        try
+        {
+            _sim.AIRemoveObject(objectId, (REQUEST)((uint)REQUEST.LightRemoveBase + lightIndex));
+        }
+        catch (COMException) { /* already gone */ }
     }
 
     /// <summary>Call from the window message hook for WM_USER_SIMCONNECT.</summary>
@@ -152,6 +244,16 @@ public sealed class SimConnectClient : IDisposable
         {
             State = ps;
             StateUpdated?.Invoke(ps);
+        }
+    }
+
+    private void OnAssignedObjectId(SimConnect s, SIMCONNECT_RECV_ASSIGNED_OBJECT_ID data)
+    {
+        if (data.dwRequestID >= (uint)REQUEST.LightBase &&
+            data.dwRequestID < (uint)REQUEST.LightRemoveBase)
+        {
+            uint lightIndex = data.dwRequestID - (uint)REQUEST.LightBase;
+            ObjectAssigned?.Invoke(lightIndex, data.dwObjectID);
         }
     }
 
