@@ -1,0 +1,111 @@
+<Window x:Class="UfoEncounter.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="UFO Encounter — MSFS 2024" Height="720" Width="900"
+        Background="{StaticResource Bg}" FontFamily="Consolas" FontSize="13">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="160"/>
+        </Grid.RowDefinitions>
+
+        <!-- Status bar -->
+        <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
+                BorderThickness="1" Padding="10" Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="SIM:" Foreground="{StaticResource Muted}"/>
+                <TextBlock x:Name="SimStatus" Text=" DISCONNECTED" Foreground="{StaticResource Warn}" Margin="4,0,20,0"/>
+                <TextBlock Text="AGL:" Foreground="{StaticResource Muted}"/>
+                <TextBlock x:Name="AglText" Text=" — ft" Margin="4,0,20,0"/>
+                <TextBlock Text="ENCOUNTER:" Foreground="{StaticResource Muted}"/>
+                <TextBlock x:Name="EncounterText" Text=" idle" Margin="4,0,20,0"/>
+                <Button x:Name="ConnectBtn" Content="Connect" Click="ConnectBtn_Click" Width="90"/>
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- Scenario test buttons -->
+                <GroupBox Header="SZENARIEN (Test auf Abruf)">
+                    <WrapPanel x:Name="ScenarioPanel"/>
+                </GroupBox>
+
+                <!-- Direct effect tests -->
+                <GroupBox Header="EINZEL-EFFEKTE (Test)">
+                    <WrapPanel>
+                        <Button Content="Blackout 6s" Click="TestBlackout_Click"/>
+                        <Button Content="Stutter 6s" Click="TestStutter_Click"/>
+                        <Button Content="Hum 6s" Click="TestHum_Click"/>
+                        <Button Content="⛔ PANIK-STOP" Click="Panic_Click"
+                                Background="#3A0A0A" Foreground="#FFAAAA"/>
+                    </WrapPanel>
+                </GroupBox>
+
+                <!-- Controls -->
+                <GroupBox Header="STEUERUNG">
+                    <StackPanel>
+                        <CheckBox x:Name="RandomChk" Content="Zufallsmodus (automatische Encounters)"
+                                  Checked="RandomChk_Changed" Unchecked="RandomChk_Changed"/>
+                        <CheckBox x:Name="RealismChk" Content="Realismus-Lock (keine Encounters am Boden / unter Min-AGL)"
+                                  IsChecked="True" Checked="Realism_Changed" Unchecked="Realism_Changed"/>
+
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="170"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="70"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition/><RowDefinition/><RowDefinition/>
+                                <RowDefinition/><RowDefinition/>
+                            </Grid.RowDefinitions>
+
+                            <Label Grid.Row="0" Grid.Column="0" Content="Häufigkeit (pro Min)"/>
+                            <Slider Grid.Row="0" Grid.Column="1" x:Name="FreqSlider" Minimum="0.1" Maximum="6" Value="1"
+                                    ValueChanged="FreqSlider_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="0" Grid.Column="2" x:Name="FreqVal" Text="1.0" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="1" Grid.Column="0" Content="Dauer min (s)"/>
+                            <Slider Grid.Row="1" Grid.Column="1" x:Name="MinDurSlider" Minimum="1" Maximum="30" Value="4"
+                                    ValueChanged="DurSlider_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" x:Name="MinDurVal" Text="4" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="2" Grid.Column="0" Content="Dauer max (s)"/>
+                            <Slider Grid.Row="2" Grid.Column="1" x:Name="MaxDurSlider" Minimum="1" Maximum="60" Value="12"
+                                    ValueChanged="DurSlider_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" x:Name="MaxDurVal" Text="12" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="3" Grid.Column="0" Content="Intensität"/>
+                            <Slider Grid.Row="3" Grid.Column="1" x:Name="IntensitySlider" Minimum="0" Maximum="1" Value="0.6"
+                                    ValueChanged="IntensitySlider_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="3" Grid.Column="2" x:Name="IntensityVal" Text="0.60" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="4" Grid.Column="0" Content="Min-AGL (ft)"/>
+                            <Slider Grid.Row="4" Grid.Column="1" x:Name="AglSlider" Minimum="0" Maximum="10000" Value="1500"
+                                    ValueChanged="AglSlider_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="4" Grid.Column="2" x:Name="AglVal" Text="1500" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Label Content="Seed:" VerticalAlignment="Center"/>
+                            <TextBox x:Name="SeedBox" Width="120" Margin="4" Background="{StaticResource Panel}"
+                                     Foreground="{StaticResource Text}"/>
+                            <Button Content="Anwenden" Click="ApplySeed_Click"/>
+                            <Button Content="Zufällig" Click="RandomSeed_Click"/>
+                            <Button Content="Sichtungen exportieren" Click="ExportLog_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Log -->
+        <Border Grid.Row="2" Background="#02060A" BorderBrush="{StaticResource Border}" BorderThickness="1" Margin="0,8,0,0">
+            <ScrollViewer x:Name="LogScroll" VerticalScrollBarVisibility="Auto">
+                <TextBlock x:Name="LogText" FontFamily="Consolas" FontSize="12"
+                           Foreground="#88BBEE" Padding="8" TextWrapping="Wrap"/>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>
