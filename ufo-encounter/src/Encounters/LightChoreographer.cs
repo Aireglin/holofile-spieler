@@ -166,9 +166,10 @@ public sealed class LightChoreographer
     {
         double t = (DateTime.UtcNow - _start).TotalSeconds;
         var p = _sim.State;
-        // Re-assert the freeze a few times a second: AI objects can wake up and
-        // drift, which otherwise looks like the light "resetting" to its origin.
-        bool reFreeze = (++_frame % 25) == 0;
+        // Freeze is asserted only briefly after spawn; zeroing velocity each frame
+        // keeps objects put afterwards. Repeated freezing caused a periodic hitch.
+        _frame++;
+        bool reFreeze = _frame <= 60 && (_frame % 12) == 0;
         double? nearest = null;
         foreach (var l in _lights)
         {
@@ -184,7 +185,8 @@ public sealed class LightChoreographer
             else
             {
                 if (!l.SmoothInit) { Array.Copy(raw, l.Smoothed, 3); l.SmoothInit = true; }
-                for (int i = 0; i < 3; i++) l.Smoothed[i] = Lerp(l.Smoothed[i], raw[i], 0.14);
+                // Gentle easing (~time constant 0.25 s at 50 Hz) for fluid motion.
+                for (int i = 0; i < 3; i++) l.Smoothed[i] = Lerp(l.Smoothed[i], raw[i], 0.08);
                 off = l.Smoothed;
             }
 

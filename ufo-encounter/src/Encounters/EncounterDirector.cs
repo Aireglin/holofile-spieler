@@ -50,6 +50,9 @@ public sealed class EncounterDirector
     /// <summary>In random mode, bias scenario choice by time of day (night → lights,
     /// day → solid/mothership).</summary>
     public bool DayNightBias { get; set; } = true;
+    /// <summary>Play the radio-static/crackle layer during electrical failures
+    /// (off by default — the hum alone is preferred).</summary>
+    public bool StaticEnabled { get; set; } = false;
 
     public double BlackoutMinSec { get; set; } = 8;
     public double BlackoutMaxSec { get; set; } = 25;
@@ -292,7 +295,7 @@ public sealed class EncounterDirector
 
         double droneTarget = Math.Clamp(Intensity * (0.15 + 0.85 * prox), 0, 1);
         double subTarget = _subBassOn ? Math.Clamp((0.4 + 0.6 * Dread) * prox, 0, 1) : 0;
-        double statTarget = _disruptor.IsActive ? 0.45 * (0.5 + 0.5 * Intensity) : 0;
+        double statTarget = (StaticEnabled && _disruptor.IsActive) ? 0.45 * (0.5 + 0.5 * Intensity) : 0;
 
         _droneVol = Lerp(_droneVol, droneTarget, 0.12);
         _subVol = Lerp(_subVol, subTarget, 0.12);
