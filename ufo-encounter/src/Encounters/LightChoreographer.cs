@@ -66,6 +66,7 @@ public sealed class LightChoreographer
     private double _durationSec;
     private DateTime _start;
     private string _title = "";
+    private long _frame;
 
     public bool IsActive { get; private set; }
     /// <summary>Distance (m) of the nearest spawned object, or null if none.</summary>
@@ -76,7 +77,7 @@ public sealed class LightChoreographer
         _sim = sim;
         _log = log;
         _rng = rng ?? new Random();
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) }; // ~30 Hz
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) }; // ~50 Hz
         _timer.Tick += OnTick;
         _sim.ObjectAssigned += OnObjectAssigned;
     }
@@ -163,10 +164,14 @@ public sealed class LightChoreographer
     {
         double t = (DateTime.UtcNow - _start).TotalSeconds;
         var p = _sim.State;
+        // Re-assert the freeze a few times a second: AI objects can wake up and
+        // drift, which otherwise looks like the light "resetting" to its origin.
+        bool reFreeze = (++_frame % 25) == 0;
         double? nearest = null;
         foreach (var l in _lights)
         {
             if (l.ObjectId is not uint id) continue;
+            if (reFreeze) _sim.FreezeLight(id);
             var off = OffsetFor(l, t);
             double d = Math.Sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]);
             if (nearest is null || d < nearest) nearest = d;

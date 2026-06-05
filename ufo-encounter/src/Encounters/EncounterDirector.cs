@@ -43,6 +43,8 @@ public sealed class EncounterDirector
     public double Dread { get; set; } = 0.4;
     /// <summary>Run encounters as multi-phase mini-stories.</summary>
     public bool MultiPhase { get; set; } = true;
+    /// <summary>Play the one-shot approach whoosh (currently off — too prominent).</summary>
+    public bool WhooshEnabled { get; set; } = false;
 
     public double BlackoutMinSec { get; set; } = 8;
     public double BlackoutMaxSec { get; set; } = 25;
@@ -144,7 +146,7 @@ public sealed class EncounterDirector
                 _proxTarget = ph.Proximity;
                 _subBassOn = ph.SubBass;
                 if (ph.Silence) { _proxTarget = 0; _subBassOn = false; _audio.HardSilence(); }
-                if (ph.Whoosh) _audio.PlayWhoosh(0.5 + 0.5 * Dread);
+                if (ph.Whoosh && WhooshEnabled) _audio.PlayWhoosh(0.35 + 0.35 * Dread);
 
                 if (LightsEnabled && ph.Light is LightPattern pat)
                 {

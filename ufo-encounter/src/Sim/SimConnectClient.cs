@@ -34,6 +34,9 @@ public struct ObjectPose
     public double Pitch;      // degrees
     public double Bank;       // degrees
     public double Heading;    // degrees true
+    public double Vx;         // VELOCITY BODY X (ft/s) — kept 0 to stop drift
+    public double Vy;         // VELOCITY BODY Y (ft/s)
+    public double Vz;         // VELOCITY BODY Z (ft/s)
 }
 
 /// <summary>Holds a single string SimVar (e.g. TITLE).</summary>
@@ -141,6 +144,9 @@ public sealed class SimConnectClient : IDisposable
         Move("PLANE PITCH DEGREES", "degrees");
         Move("PLANE BANK DEGREES", "degrees");
         Move("PLANE HEADING DEGREES TRUE", "degrees");
+        Move("VELOCITY BODY X", "feet per second");
+        Move("VELOCITY BODY Y", "feet per second");
+        Move("VELOCITY BODY Z", "feet per second");
         _sim!.RegisterDataDefineStruct<ObjectPose>(DEFINITION.MoveObject);
 
         // TITLE is a string SimVar (no unit) — used to auto-detect the loaded aircraft.
