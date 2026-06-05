@@ -65,7 +65,7 @@ public sealed record EncounterScenario(
         new EncounterScenario(
             "Mutterschiff (Tag)",
             "Ein massives Objekt, deutlich größer als ein Flugzeug. Lauert weit entfernt, nähert sich "
-            + "langsam und springt gelegentlich „unmöglich" um. Tiefes Sub-Summen, gut bei Tageslicht.",
+            + "langsam und springt gelegentlich 'unmöglich' um. Tiefes Sub-Summen, gut bei Tageslicht.",
             DisruptionKind.None, Hum: true, HumIntensity: 0.85, HumBaseHz: 48,
             Lights: LightPattern.Mothership, Mothership: true),
 
