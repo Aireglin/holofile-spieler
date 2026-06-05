@@ -114,10 +114,18 @@
                         <CheckBox x:Name="LightsChk" Content="Lichter aktiv" IsChecked="True"
                                   Checked="Lights_Changed" Unchecked="Lights_Changed"/>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                            <Label Content="SimObject-Titel:" VerticalAlignment="Center"/>
+                            <Label Content="Licht-Titel:" VerticalAlignment="Center" Width="100"/>
                             <TextBox x:Name="LightTitleBox" Width="240" Margin="4" Background="{StaticResource Panel}"
                                      Foreground="{StaticResource Text}" TextChanged="LightTitle_Changed"
                                      ToolTip="Exakter Titel eines vorhandenen SimObjects (siehe README). Leer = Lichter aus."/>
+                            <Button Content="Aktuelles Flugzeug übernehmen" Click="UseCurrentForLight_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Label Content="Mutterschiff-Titel:" VerticalAlignment="Center" Width="100"/>
+                            <TextBox x:Name="MothershipTitleBox" Width="240" Margin="4" Background="{StaticResource Panel}"
+                                     Foreground="{StaticResource Text}" TextChanged="MothershipTitle_Changed"
+                                     ToolTip="Titel eines großen SimObjects (z. B. Airliner) für die Mutterschiff-Szenarien."/>
+                            <Button Content="Aktuelles Flugzeug übernehmen" Click="UseCurrentForMothership_Click"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                             <Label Content="Anzahl:" VerticalAlignment="Center"/>
@@ -130,6 +138,7 @@
                             <Button Content="Test: Tic-Tac" Click="TestLightTicTac_Click"/>
                             <Button Content="Test: Wingman" Click="TestLightWingman_Click"/>
                             <Button Content="Test: Pop-up" Click="TestLightPopup_Click"/>
+                            <Button Content="Test: Mutterschiff" Click="TestMothership_Click"/>
                         </WrapPanel>
                     </StackPanel>
                 </GroupBox>

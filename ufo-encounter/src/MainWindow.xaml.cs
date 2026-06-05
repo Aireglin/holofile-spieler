@@ -43,6 +43,12 @@ public partial class MainWindow : Window
         _sim.Disconnected += () => { SimStatus.Text = " DISCONNECTED"; SimStatus.Foreground = (System.Windows.Media.Brush)FindResource("Warn"); };
         _sim.StateUpdated += s => AglText.Text = $" {s.AltitudeAgl:F0} ft";
         _sim.Log += Trace;
+        _sim.TitleReceived += title =>
+        {
+            var target = _titleTarget ?? LightTitleBox;
+            if (!string.IsNullOrEmpty(title)) target.Text = title;
+            _titleTarget = null;
+        };
 
         _director.EncounterStateChanged += (name, active) =>
             EncounterText.Text = active ? $" ▶ {name}" : " idle";
@@ -156,8 +162,30 @@ public partial class MainWindow : Window
         _director.BlackoutMaxSec = BlackMaxSlider.Value;
         _director.LightsEnabled = LightsChk.IsChecked == true;
         _director.LightObjectTitle = LightTitleBox.Text;
+        _director.MothershipTitle = MothershipTitleBox.Text;
         _director.LightCount = (int)LightCountSlider.Value;
     }
+
+    // Which field a pending "use current aircraft" request should fill.
+    private TextBox? _titleTarget;
+
+    private void UseCurrentForLight_Click(object sender, RoutedEventArgs e) => RequestTitleInto(LightTitleBox);
+    private void UseCurrentForMothership_Click(object sender, RoutedEventArgs e) => RequestTitleInto(MothershipTitleBox);
+
+    private void RequestTitleInto(TextBox target)
+    {
+        if (_sim is not { IsConnected: true }) { Trace("Not connected — can't read aircraft title."); return; }
+        _titleTarget = target;
+        _sim.RequestAircraftTitle();
+    }
+
+    private void MothershipTitle_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_director != null) _director.MothershipTitle = MothershipTitleBox.Text;
+    }
+
+    private void TestMothership_Click(object sender, RoutedEventArgs e) =>
+        _director?.TestLights(LightPattern.Mothership, 20, mothership: true);
 
     private void BlackSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {

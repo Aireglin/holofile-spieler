@@ -15,28 +15,43 @@ public enum LightPattern
     Formation,
     /// <summary>Pops up ahead and dances in tight loops.</summary>
     PopUp,
+    /// <summary>A single massive object: slow, looming, with occasional
+    /// "impossible" instantaneous repositions. Reads well by day.</summary>
+    Mothership,
 }
 
 /// <summary>
-/// Spawns light SimObjects and animates them relative to the player aircraft.
-/// Offsets are computed in an aircraft-local frame (right / forward / up, in
-/// metres) and converted to lat/lon/alt each frame.
+/// Spawns SimObjects and animates them relative to the player aircraft. Offsets
+/// are computed in an aircraft-local frame (right / forward / up, in metres) and
+/// converted to lat/lon/alt each frame.
 ///
-/// EXPERIMENTAL: needs a SimObject title that exists in the user's install. If
-/// nothing appears, SimConnect logs an exception with the bad title and the
-/// user can try another via the UI.
+/// Every encounter draws fresh per-object randomness (speed, distance, amplitude,
+/// side, jump rhythm, dart chance), so the same scenario never plays out twice.
+///
+/// EXPERIMENTAL: needs a SimObject title that exists in the user's install.
 /// </summary>
 public sealed class LightChoreographer
 {
     private const double MetersPerDegLat = 111320.0;
     private const double FeetPerMeter = 3.28084;
 
+    /// <summary>Per-object randomness, rolled once per encounter.</summary>
+    private sealed class Vars
+    {
+        public double Phase;        // 0..2π
+        public double Speed;        // ~0.7..1.5 time multiplier
+        public double Amp;          // ~0.6..1.6 size multiplier
+        public int Side;            // ±1 left/right bias
+        public double Dist;         // base distance multiplier ~0.7..1.4
+        public double DartChance;   // 0..1 chance of an oversized jump (Tic-Tac)
+        public double JumpMin, JumpMax; // Tic-Tac dwell range (s)
+    }
+
     private sealed class Light
     {
         public uint Index;
         public uint? ObjectId;
-        public double Phase;
-        // Tic-Tac state:
+        public Vars V = new();
         public double[] Current = new double[3]; // right, fwd, up (metres)
         public double NextJump;
     }
@@ -44,7 +59,7 @@ public sealed class LightChoreographer
     private readonly SimConnectClient _sim;
     private readonly Action<string>? _log;
     private readonly DispatcherTimer _timer;
-    private readonly Random _rng = new();
+    private readonly Random _rng;
     private readonly List<Light> _lights = new();
 
     private LightPattern _pattern;
@@ -54,10 +69,11 @@ public sealed class LightChoreographer
 
     public bool IsActive { get; private set; }
 
-    public LightChoreographer(SimConnectClient sim, Action<string>? log = null)
+    public LightChoreographer(SimConnectClient sim, Action<string>? log = null, Random? rng = null)
     {
         _sim = sim;
         _log = log;
+        _rng = rng ?? new Random();
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) }; // ~30 Hz
         _timer.Tick += OnTick;
         _sim.ObjectAssigned += OnObjectAssigned;
@@ -77,14 +93,14 @@ public sealed class LightChoreographer
         _start = DateTime.UtcNow;
         IsActive = true;
 
-        count = Math.Clamp(count, 1, 8);
+        // A mothership is a single large object; light patterns can have several.
+        count = pattern == LightPattern.Mothership ? 1 : Math.Clamp(count, 1, 8);
         for (uint i = 0; i < count; i++)
         {
-            var light = new Light { Index = i, Phase = _rng.NextDouble() * Math.PI * 2, NextJump = 0 };
-            JumpTicTac(light, 0); // seed an initial offset
+            var light = new Light { Index = i, V = RollVars() };
+            Seed(light);
             _lights.Add(light);
-            var pose = ComposePose(p, light.Current, 0);
-            _sim.SpawnLight(_title, pose, i);
+            _sim.SpawnLight(_title, ComposePose(p, light.Current, 0, light.V), i);
         }
         _log?.Invoke($"Lights: spawning {count}× '{_title}' ({pattern}).");
         _timer.Start();
@@ -97,6 +113,25 @@ public sealed class LightChoreographer
             if (l.ObjectId is uint id) _sim.RemoveLight(id, l.Index);
         _lights.Clear();
         IsActive = false;
+    }
+
+    private Vars RollVars() => new()
+    {
+        Phase = _rng.NextDouble() * Math.PI * 2,
+        Speed = 0.7 + _rng.NextDouble() * 0.8,
+        Amp = 0.6 + _rng.NextDouble() * 1.0,
+        Side = _rng.Next(2) == 0 ? -1 : 1,
+        Dist = 0.7 + _rng.NextDouble() * 0.7,
+        DartChance = 0.12 + _rng.NextDouble() * 0.25,
+        JumpMin = 0.3 + _rng.NextDouble() * 0.3,
+        JumpMax = 0.7 + _rng.NextDouble() * 0.8,
+    };
+
+    /// <summary>Seed a sensible starting offset per pattern.</summary>
+    private void Seed(Light l)
+    {
+        if (_pattern == LightPattern.Mothership) JumpMothership(l, 0);
+        else JumpTicTac(l, 0);
     }
 
     private void OnObjectAssigned(uint lightIndex, uint objectId)
@@ -114,27 +149,26 @@ public sealed class LightChoreographer
         foreach (var l in _lights)
         {
             if (l.ObjectId is not uint id) continue;
-            var offset = OffsetFor(l, t);
-            _sim.MoveLight(id, ComposePose(p, offset, t));
+            _sim.MoveLight(id, ComposePose(p, OffsetFor(l, t), t, l.V));
         }
     }
 
     /// <summary>Local offset (right, fwd, up in metres) for a light at time t.</summary>
     private double[] OffsetFor(Light l, double t)
     {
-        double ph = l.Phase;
+        var v = l.V;
+        double ph = v.Phase;
         int idx = (int)l.Index;
         int n = _lights.Count;
 
         switch (_pattern)
         {
             case LightPattern.Wingman:
-                // Hold aft-right, gently bobbing.
                 return new[]
                 {
-                    45 + 5 * Math.Sin(t * 0.7 + ph),
-                    -55 + idx * -18.0,
-                    -2 + 4 * Math.Sin(t * 0.9 + ph),
+                    v.Side * (40 + 30 * v.Dist) + 6 * v.Amp * Math.Sin(t * 0.7 * v.Speed + ph),
+                    -(45 + 25 * v.Dist) + idx * -18.0,
+                    -2 + 5 * v.Amp * Math.Sin(t * 0.9 * v.Speed + ph),
                 };
 
             case LightPattern.FlyBy:
@@ -142,29 +176,39 @@ public sealed class LightChoreographer
                 double u = Math.Clamp(t / Math.Max(1.0, _durationSec), 0, 1);
                 return new[]
                 {
-                    120.0 + idx * 15,
-                    Lerp(3000, -1800, u),
-                    25 * Math.Sin(u * Math.PI),
+                    v.Side * (90 + 60 * v.Dist) + idx * 15,
+                    Lerp(2200 + 2000 * v.Dist, -1500 - 800 * v.Dist, u),
+                    (15 + 25 * v.Amp) * Math.Sin(u * Math.PI),
                 };
             }
 
             case LightPattern.Formation:
             {
-                double spread = (idx - (n - 1) / 2.0) * 28.0;       // V across
+                double spread = (idx - (n - 1) / 2.0) * (24 + 12 * v.Dist);
                 return new[]
                 {
-                    spread,
-                    140 + Math.Abs(spread) * 0.6 + 12 * Math.Sin(t * 0.5 + ph),
-                    8 + 4 * Math.Sin(t * 0.4 + ph),
+                    spread + 8 * v.Amp * Math.Sin(t * 0.3 * v.Speed + ph),
+                    120 + 60 * v.Dist + Math.Abs(spread) * 0.6 + 12 * Math.Sin(t * 0.5 * v.Speed + ph),
+                    8 + 5 * v.Amp * Math.Sin(t * 0.4 * v.Speed + ph),
                 };
             }
 
             case LightPattern.PopUp:
                 return new[]
                 {
-                    70 * Math.Sin(t * 1.4 + ph),
-                    320 + 50 * Math.Sin(t * 0.8 + ph),
-                    15 + 35 * Math.Sin(t * 2.0 + ph * 1.3),
+                    v.Side * (40 + 60 * v.Amp) * Math.Sin(t * 1.4 * v.Speed + ph),
+                    260 + 120 * v.Dist + 50 * Math.Sin(t * 0.8 * v.Speed + ph),
+                    15 + (25 + 20 * v.Amp) * Math.Sin(t * 2.0 * v.Speed + ph * 1.3),
+                };
+
+            case LightPattern.Mothership:
+                if (t >= l.NextJump) JumpMothership(l, t);
+                // Slow looming sway around the (occasionally repositioned) anchor.
+                return new[]
+                {
+                    l.Current[0] + 180 * v.Amp * Math.Sin(t * 0.15 * v.Speed + ph),
+                    l.Current[1] + 300 * Math.Sin(t * 0.10 * v.Speed),
+                    l.Current[2] + 70 * Math.Sin(t * 0.12 * v.Speed + ph),
                 };
 
             case LightPattern.TicTac:
@@ -176,14 +220,27 @@ public sealed class LightChoreographer
 
     private void JumpTicTac(Light l, double t)
     {
-        l.Current[0] = (_rng.NextDouble() * 2 - 1) * 600;   // right ±600 m
-        l.Current[1] = 200 + _rng.NextDouble() * 1300;       // fwd 200..1500 m
-        l.Current[2] = (_rng.NextDouble() * 2 - 1) * 200 + 100; // up -100..300 m
-        l.NextJump = t + 0.4 + _rng.NextDouble() * 0.5;      // every ~0.4–0.9 s
+        var v = l.V;
+        bool dart = _rng.NextDouble() < v.DartChance;
+        double reach = (dart ? 1800 : 700) * v.Dist;
+        l.Current[0] = (_rng.NextDouble() * 2 - 1) * reach;                  // right
+        l.Current[1] = 200 + _rng.NextDouble() * (reach + 600);             // fwd
+        l.Current[2] = (_rng.NextDouble() * 2 - 1) * 250 + 100;             // up
+        double dwell = v.JumpMin + _rng.NextDouble() * (v.JumpMax - v.JumpMin);
+        l.NextJump = t + (dart ? dwell * 0.4 : dwell);                       // darts snap quicker
+    }
+
+    private void JumpMothership(Light l, double t)
+    {
+        var v = l.V;
+        l.Current[0] = (_rng.NextDouble() * 2 - 1) * 1500 * v.Dist;          // right ±
+        l.Current[1] = 2200 + _rng.NextDouble() * 3500 * v.Dist;            // far ahead
+        l.Current[2] = -200 + _rng.NextDouble() * 1000;                     // can loom above
+        l.NextJump = t + 6 + _rng.NextDouble() * 8;                         // reposition every 6–14s
     }
 
     /// <summary>Convert a local (right, fwd, up) offset to a world pose.</summary>
-    private static ObjectPose ComposePose(PlaneState p, double[] off, double t)
+    private static ObjectPose ComposePose(PlaneState p, double[] off, double t, Vars v)
     {
         double right = off[0], fwd = off[1], up = off[2];
         double hr = p.HeadingTrue * Math.PI / 180.0;
@@ -202,7 +259,7 @@ public sealed class LightChoreographer
             Longitude = p.Longitude + dLon,
             AltitudeMsl = p.AltitudeMsl + up * FeetPerMeter,
             Pitch = 0,
-            Bank = 20 * Math.Sin(t * 1.7),  // a little visual life
+            Bank = 15 * Math.Sin(t * 1.7 * v.Speed + v.Phase),  // a little visual life
             Heading = p.HeadingTrue,
         };
     }

@@ -39,6 +39,7 @@ public sealed class EncounterDirector
 
     // Lights
     public string LightObjectTitle { get; set; } = "";
+    public string MothershipTitle { get; set; } = "";
     public int LightCount { get; set; } = 2;
     public bool LightsEnabled { get; set; } = true;
 
@@ -131,7 +132,10 @@ public sealed class EncounterDirector
             }
 
             if (LightsEnabled && scenario.Lights is LightPattern pattern)
-                _lights.Start(pattern, LightCount, visual, LightObjectTitle);
+            {
+                string title = scenario.Mothership ? MothershipTitle : LightObjectTitle;
+                _lights.Start(pattern, LightCount, visual, title);
+            }
 
             var elec = _disruptor.RunAsync(BuildPlan(scenario, visual), ct);
 
@@ -179,10 +183,11 @@ public sealed class EncounterDirector
     }
 
     /// <summary>Spawn lights on their own for a quick visual test.</summary>
-    public void TestLights(LightPattern pattern, double durationSec)
+    public void TestLights(LightPattern pattern, double durationSec, bool mothership = false)
     {
         if (!LightsEnabled) { _trace?.Invoke("Lights are disabled."); return; }
-        _lights.Start(pattern, LightCount, durationSec, LightObjectTitle);
+        string title = mothership ? MothershipTitle : LightObjectTitle;
+        _lights.Start(pattern, LightCount, durationSec, title);
         Task.Delay(TimeSpan.FromSeconds(durationSec)).ContinueWith(
             _ => _lights.Stop(), TaskScheduler.FromCurrentSynchronizationContext());
     }

@@ -3,6 +3,8 @@ namespace UfoEncounter.Encounters;
 /// <summary>
 /// A named encounter preset loosely modeled on recurring pilot/UAP reports.
 /// A scenario drives the hum, the electrics, and (optionally) a light pattern.
+/// When <see cref="Mothership"/> is set, the director uses the separate
+/// mothership SimObject title instead of the light title.
 /// </summary>
 public sealed record EncounterScenario(
     string Name,
@@ -11,7 +13,8 @@ public sealed record EncounterScenario(
     bool Hum,
     double HumIntensity,
     double HumBaseHz,
-    LightPattern? Lights)
+    LightPattern? Lights,
+    bool Mothership = false)
 {
     /// <summary>Catalog of presets. Order is the order shown in the UI.</summary>
     public static readonly IReadOnlyList<EncounterScenario> Catalog = new[]
@@ -58,6 +61,20 @@ public sealed record EncounterScenario(
             + "entkoppelt vom Encounter zurück (eigene Zufallsdauer). Lichter beobachten aus dem Dunkeln.",
             DisruptionKind.DeepBlackout, Hum: true, HumIntensity: 0.7, HumBaseHz: 55,
             Lights: LightPattern.Wingman),
+
+        new EncounterScenario(
+            "Mutterschiff (Tag)",
+            "Ein massives Objekt, deutlich größer als ein Flugzeug. Lauert weit entfernt, nähert sich "
+            + "langsam und springt gelegentlich „unmöglich" um. Tiefes Sub-Summen, gut bei Tageslicht.",
+            DisruptionKind.None, Hum: true, HumIntensity: 0.85, HumBaseHz: 48,
+            Lights: LightPattern.Mothership, Mothership: true),
+
+        new EncounterScenario(
+            "Mutterschiff (E-Störung)",
+            "Das massive Objekt kommt näher und legt die Elektrik lahm: tiefer Total-Blackout, "
+            + "während es lautlos über/vor dir steht.",
+            DisruptionKind.DeepBlackout, Hum: true, HumIntensity: 0.9, HumBaseHz: 45,
+            Lights: LightPattern.Mothership, Mothership: true),
     };
 
     public static EncounterScenario ByName(string name) =>

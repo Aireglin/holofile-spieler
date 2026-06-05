@@ -36,6 +36,14 @@ public struct ObjectPose
     public double Heading;    // degrees true
 }
 
+/// <summary>Holds a single string SimVar (e.g. TITLE).</summary>
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi, Pack = 1)]
+public struct TitleStruct
+{
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+    public string Value;
+}
+
 /// <summary>
 /// Thin wrapper around the managed SimConnect API. All public methods must be
 /// invoked on the UI thread (the thread that owns the window handle), because
@@ -45,8 +53,8 @@ public sealed class SimConnectClient : IDisposable
 {
     public const uint WM_USER_SIMCONNECT = 0x0402;
 
-    private enum DEFINITION { PlaneState, MoveObject }
-    private enum REQUEST : uint { PlaneState = 0, LightBase = 1000, LightRemoveBase = 2000 }
+    private enum DEFINITION { PlaneState, MoveObject, Title }
+    private enum REQUEST : uint { PlaneState = 0, Title = 1, LightBase = 1000, LightRemoveBase = 2000 }
     private enum GROUP { Priority }
 
     // Events we transmit to the user aircraft or to spawned objects.
@@ -75,6 +83,8 @@ public sealed class SimConnectClient : IDisposable
     public event Action<string>? Log;
     /// <summary>Raised when a spawn request returns its object id (requestId, objectId).</summary>
     public event Action<uint, uint>? ObjectAssigned;
+    /// <summary>Raised with the user aircraft's exact SimObject title after RequestAircraftTitle().</summary>
+    public event Action<string>? TitleReceived;
 
     public SimConnectClient(IntPtr hwnd) => _hwnd = hwnd;
 
@@ -132,6 +142,21 @@ public sealed class SimConnectClient : IDisposable
         Move("PLANE BANK DEGREES", "degrees");
         Move("PLANE HEADING DEGREES TRUE", "degrees");
         _sim!.RegisterDataDefineStruct<ObjectPose>(DEFINITION.MoveObject);
+
+        // TITLE is a string SimVar (no unit) — used to auto-detect the loaded aircraft.
+        _sim!.AddToDataDefinition(DEFINITION.Title, "TITLE", null,
+            SIMCONNECT_DATATYPE.STRING256, 0.0f, SimConnect.SIMCONNECT_UNUSED);
+        _sim!.RegisterDataDefineStruct<TitleStruct>(DEFINITION.Title);
+    }
+
+    /// <summary>Ask the sim for the exact title of the currently loaded aircraft
+    /// (a one-shot request; the answer arrives via <see cref="TitleReceived"/>).</summary>
+    public void RequestAircraftTitle()
+    {
+        if (_sim == null) return;
+        _sim.RequestDataOnSimObject(REQUEST.Title, DEFINITION.Title,
+            SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.ONCE,
+            SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT, 0, 0, 0);
     }
 
     private void RegisterEvents()
@@ -239,11 +264,17 @@ public sealed class SimConnectClient : IDisposable
 
     private void OnSimobjectData(SimConnect s, SIMCONNECT_RECV_SIMOBJECT_DATA data)
     {
-        if ((REQUEST)data.dwRequestID != REQUEST.PlaneState) return;
-        if (data.dwData[0] is PlaneState ps)
+        switch ((REQUEST)data.dwRequestID)
         {
-            State = ps;
-            StateUpdated?.Invoke(ps);
+            case REQUEST.PlaneState when data.dwData[0] is PlaneState ps:
+                State = ps;
+                StateUpdated?.Invoke(ps);
+                break;
+            case REQUEST.Title when data.dwData[0] is TitleStruct t:
+                var title = t.Value?.Trim() ?? "";
+                Log?.Invoke($"Current aircraft title: '{title}'");
+                TitleReceived?.Invoke(title);
+                break;
         }
     }
 

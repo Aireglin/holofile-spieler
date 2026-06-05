@@ -24,7 +24,12 @@ Pilot-/UAP-Berichte.
   wieder eingeschaltet (auch bei Stop/Absturz/Beenden → Failsafe).
 - **Licht-Choreografie** *(experimentell)*: spawnt Licht-SimObjects und lässt
   sie relativ zum Flugzeug tanzen — Muster **Tic-Tac, Wingman, Fly-by,
-  Formation, Pop-up**. Braucht einen gültigen SimObject-Titel (s. u.).
+  Formation, Pop-up**. Jede Begegnung wird **zufällig variiert** (Tempo,
+  Distanz, Amplitude, Sprungrhythmus, gelegentliche „Darts") — das gleiche
+  Szenario läuft nie zweimal identisch ab.
+- **Mutterschiff**: zwei Szenarien mit einem **massiven Objekt** (eigenes
+  Titel-Feld), das weit entfernt lauert, sich langsam nähert und gelegentlich
+  „unmöglich" umspringt — auch **bei Tag** sichtbar.
 - **Dumpfes Summen** (in-memory synthetisiert, keine Audiodateien nötig).
 - **Zufalls- oder Manuell-Modus**: Häufigkeit, Dauer (min/max) und Intensität
   per Slider; oder Encounter gezielt per Knopfdruck.
@@ -47,19 +52,29 @@ dafür den **exakten Titel** eines vorhandenen Objekts — der variiert je nach
 Installation, deshalb ist das Feld in der UI leer (= Lichter aus), bis du einen
 Titel einträgst.
 
-So findest du einen funktionierenden Titel:
+**Einfachster Weg (auch für die Xbox/Store-Version): Auto-Erkennung.**
+Lade in MSFS das Flugzeug, das als „Licht" bzw. „Mutterschiff" dienen soll,
+und klick im Panel auf **„Aktuelles Flugzeug übernehmen"** neben dem jeweiligen
+Feld. Das Tool liest den exakten `TITLE` per SimConnect aus und füllt das Feld.
+Du musst keine Dateien suchen.
+
+> Hinweis: Bei der **Store/Xbox-Version** liegen die Aircraft-Dateien in einem
+> geschützten Windows-Ordner und sind kaum manuell durchsuchbar — die
+> Auto-Erkennung ist dort der praktikable Weg.
+
+Alternativ manuell:
 
 1. In MSFS **Developer Mode** an → Menü **Windows → Behaviors** bzw.
-   **AI/Traffic**; oder die Datei-Titel in deinen Aircraft-Ordnern ansehen
-   (`aircraft.cfg`, Eintrag `title = ...` unter `[FLTSIM.x]`).
-2. Trage den Titel **exakt** (Groß/Klein, Leerzeichen) ins Feld
-   **„SimObject-Titel"** ein, z. B. der Titel eines kleinen Flugzeugs.
-3. Auf **„Test: Pop-up"** klicken. Erscheint nichts, steht im Log unten eine
-   `SimConnect exception` (meist ein falscher Titel) → anderen Titel probieren.
+   **AI/Traffic**; oder (nur Steam-Version komfortabel) die `aircraft.cfg`
+   ansehen, Eintrag `title = ...` unter `[FLTSIM.x]`.
+2. Titel **exakt** (Groß/Klein, Leerzeichen) ins Feld eintragen.
+3. Auf **„Test: Pop-up"** (bzw. **„Test: Mutterschiff"**) klicken. Erscheint
+   nichts, steht im Log unten eine `SimConnect exception` (meist falscher
+   Titel) → anderen Titel probieren.
 
-> Tipp: Nachts liest sich ein kleines Flugzeug mit Lichtern bereits als
-> „tanzendes Licht". Sag mir, welche Titel bei dir vorhanden sind, dann stelle
-> ich einen sinnvollen Default ein.
+> Idee für mehr Dynamik: Trage als Licht-Titel ein **kleines** Objekt und als
+> Mutterschiff-Titel ein **großes** (z. B. einen Airliner) ein — so orientieren
+> sich die Encounters nicht am eigenen Flugzeugtyp.
 
 ## Voraussetzungen
 
