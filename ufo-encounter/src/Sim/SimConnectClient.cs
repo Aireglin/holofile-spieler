@@ -165,8 +165,12 @@ public sealed class SimConnectClient : IDisposable
             _sim!.MapClientEventToSimEvent(e, e.ToString());
     }
 
-    /// <summary>Fire a (toggle/set) event at an object (default: the user aircraft).</summary>
-    public void Transmit(SimEvent e, uint data = 0, uint objectId = SimConnect.SIMCONNECT_OBJECT_ID_USER)
+    /// <summary>Fire a (toggle/set) event at the user aircraft.</summary>
+    public void Transmit(SimEvent e, uint data = 0) =>
+        TransmitTo(SimConnect.SIMCONNECT_OBJECT_ID_USER, e, data);
+
+    /// <summary>Fire a (toggle/set) event at a specific object id.</summary>
+    public void TransmitTo(uint objectId, SimEvent e, uint data = 0)
     {
         if (_sim == null) return;
         try
@@ -222,9 +226,9 @@ public sealed class SimConnectClient : IDisposable
     /// <summary>Freeze physics on a spawned object so our position writes stick.</summary>
     public void FreezeLight(uint objectId)
     {
-        Transmit(SimEvent.FREEZE_LATITUDE_LONGITUDE_SET, 1, objectId);
-        Transmit(SimEvent.FREEZE_ALTITUDE_SET, 1, objectId);
-        Transmit(SimEvent.FREEZE_ATTITUDE_SET, 1, objectId);
+        TransmitTo(objectId, SimEvent.FREEZE_LATITUDE_LONGITUDE_SET, 1);
+        TransmitTo(objectId, SimEvent.FREEZE_ALTITUDE_SET, 1);
+        TransmitTo(objectId, SimEvent.FREEZE_ATTITUDE_SET, 1);
     }
 
     public void RemoveLight(uint objectId, uint lightIndex)
