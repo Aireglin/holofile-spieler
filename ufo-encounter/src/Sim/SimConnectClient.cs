@@ -19,6 +19,7 @@ public struct PlaneState
     public double MasterBattery;    // ELECTRICAL MASTER BATTERY (bool)
     public double MasterAlternator; // GENERAL ENG MASTER ALTERNATOR:1 (bool)
     public double HeadingTrue;      // PLANE HEADING DEGREES TRUE (degrees)
+    public double TimeOfDay;        // TIME OF DAY (enum: 1=dawn 2=day 3=dusk 4=night)
 }
 
 /// <summary>
@@ -131,6 +132,7 @@ public sealed class SimConnectClient : IDisposable
         Read("ELECTRICAL MASTER BATTERY", "Bool");
         Read("GENERAL ENG MASTER ALTERNATOR:1", "Bool");
         Read("PLANE HEADING DEGREES TRUE", "degrees");
+        Read("TIME OF DAY", "enum");
         _sim!.RegisterDataDefineStruct<PlaneState>(DEFINITION.PlaneState);
 
         // Settable position/attitude for moving spawned light objects.

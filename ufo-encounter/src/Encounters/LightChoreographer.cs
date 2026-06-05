@@ -52,7 +52,9 @@ public sealed class LightChoreographer
         public uint Index;
         public uint? ObjectId;
         public Vars V = new();
-        public double[] Current = new double[3]; // right, fwd, up (metres)
+        public double[] Current = new double[3];  // right, fwd, up (metres)
+        public double[] Smoothed = new double[3];  // low-passed output
+        public bool SmoothInit;
         public double NextJump;
     }
 
@@ -172,13 +174,32 @@ public sealed class LightChoreographer
         {
             if (l.ObjectId is not uint id) continue;
             if (reFreeze) _sim.FreezeLight(id);
-            var off = OffsetFor(l, t);
+
+            var raw = OffsetFor(l, t);
+            double[] off;
+            if (_pattern == LightPattern.TicTac)
+            {
+                off = raw; // instant jumps are the whole point — don't smooth
+            }
+            else
+            {
+                if (!l.SmoothInit) { Array.Copy(raw, l.Smoothed, 3); l.SmoothInit = true; }
+                for (int i = 0; i < 3; i++) l.Smoothed[i] = Lerp(l.Smoothed[i], raw[i], 0.14);
+                off = l.Smoothed;
+            }
+
             double d = Math.Sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]);
             if (nearest is null || d < nearest) nearest = d;
             _sim.MoveLight(id, ComposePose(p, off, t, l.V));
         }
         NearestMeters = nearest;
     }
+
+    /// <summary>Smooth, organic pseudo-noise (sum of incommensurate sines), ~[-1,1].</summary>
+    private static double Wander(double t, double seed) =>
+        0.55 * Math.Sin(t * 0.37 + seed)
+        + 0.30 * Math.Sin(t * 0.83 + seed * 1.7)
+        + 0.15 * Math.Sin(t * 1.49 + seed * 2.6);
 
     /// <summary>Local offset (right, fwd, up in metres) for a light at time t.</summary>
     private double[] OffsetFor(Light l, double t)
@@ -187,15 +208,21 @@ public sealed class LightChoreographer
         double ph = v.Phase;
         int idx = (int)l.Index;
         int n = _lights.Count;
+        double ts = t * v.Speed;
+
+        // Organic wander per axis (different seeds), scaled by amplitude.
+        double wr = Wander(ts, ph) * v.Amp;
+        double wf = Wander(ts, ph + 2.1) * v.Amp;
+        double wu = Wander(ts, ph + 4.7) * v.Amp;
 
         switch (_pattern)
         {
             case LightPattern.Wingman:
                 return new[]
                 {
-                    v.Side * (40 + 30 * v.Dist) + 6 * v.Amp * Math.Sin(t * 0.7 * v.Speed + ph),
-                    -(45 + 25 * v.Dist) + idx * -18.0,
-                    -2 + 5 * v.Amp * Math.Sin(t * 0.9 * v.Speed + ph),
+                    v.Side * (40 + 30 * v.Dist) + 18 * wr,
+                    -(45 + 25 * v.Dist) + idx * -18.0 + 14 * wf,
+                    -2 + 10 * wu,
                 };
 
             case LightPattern.FlyBy:
@@ -203,9 +230,9 @@ public sealed class LightChoreographer
                 double u = Math.Clamp(t / Math.Max(1.0, _durationSec), 0, 1);
                 return new[]
                 {
-                    v.Side * (90 + 60 * v.Dist) + idx * 15,
+                    v.Side * (90 + 60 * v.Dist) + idx * 15 + 25 * wr,
                     Lerp(2200 + 2000 * v.Dist, -1500 - 800 * v.Dist, u),
-                    (15 + 25 * v.Amp) * Math.Sin(u * Math.PI),
+                    (15 + 25 * v.Amp) * Math.Sin(u * Math.PI) + 18 * wu,
                 };
             }
 
@@ -214,18 +241,19 @@ public sealed class LightChoreographer
                 double spread = (idx - (n - 1) / 2.0) * (24 + 12 * v.Dist);
                 return new[]
                 {
-                    spread + 8 * v.Amp * Math.Sin(t * 0.3 * v.Speed + ph),
-                    120 + 60 * v.Dist + Math.Abs(spread) * 0.6 + 12 * Math.Sin(t * 0.5 * v.Speed + ph),
-                    8 + 5 * v.Amp * Math.Sin(t * 0.4 * v.Speed + ph),
+                    spread + 16 * wr,
+                    120 + 60 * v.Dist + Math.Abs(spread) * 0.6 + 22 * wf,
+                    8 + 12 * wu,
                 };
             }
 
             case LightPattern.PopUp:
+                // Looser, less mechanical loops: a base circle plus wander.
                 return new[]
                 {
-                    v.Side * (40 + 60 * v.Amp) * Math.Sin(t * 1.4 * v.Speed + ph),
-                    260 + 120 * v.Dist + 50 * Math.Sin(t * 0.8 * v.Speed + ph),
-                    15 + (25 + 20 * v.Amp) * Math.Sin(t * 2.0 * v.Speed + ph * 1.3),
+                    v.Side * (40 + 60 * v.Amp) * Math.Sin(ts * 1.4 + ph) + 30 * wr,
+                    260 + 120 * v.Dist + 40 * Math.Sin(ts * 0.8 + ph) + 40 * wf,
+                    15 + (20 + 18 * v.Amp) * Math.Sin(ts * 2.0 + ph * 1.3) + 25 * wu,
                 };
 
             case LightPattern.Mothership:
@@ -233,9 +261,9 @@ public sealed class LightChoreographer
                 // Slow looming sway around the (occasionally repositioned) anchor.
                 return new[]
                 {
-                    l.Current[0] + 180 * v.Amp * Math.Sin(t * 0.15 * v.Speed + ph),
-                    l.Current[1] + 300 * Math.Sin(t * 0.10 * v.Speed),
-                    l.Current[2] + 70 * Math.Sin(t * 0.12 * v.Speed + ph),
+                    l.Current[0] + 180 * v.Amp * Math.Sin(ts * 0.15 + ph) + 120 * wr,
+                    l.Current[1] + 300 * Math.Sin(ts * 0.10) + 160 * wf,
+                    l.Current[2] + 70 * Math.Sin(ts * 0.12 + ph) + 80 * wu,
                 };
 
             case LightPattern.TicTac:

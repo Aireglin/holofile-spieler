@@ -52,6 +52,10 @@
                                   IsChecked="True" Checked="Realism_Changed" Unchecked="Realism_Changed"/>
                         <CheckBox x:Name="MultiPhaseChk" Content="Mehrphasige Begegnungen (Annäherung → Beobachtung → Eskalation → Abgang)"
                                   IsChecked="True" Checked="MultiPhase_Changed" Unchecked="MultiPhase_Changed"/>
+                        <CheckBox x:Name="DayNightChk" Content="Tag/Nacht-Logik (nachts Lichter, tags Mutterschiff bevorzugen)"
+                                  IsChecked="True" Checked="DayNight_Changed" Unchecked="DayNight_Changed"/>
+                        <CheckBox x:Name="WhooshChk" Content="Anflug-Whoosh abspielen"
+                                  IsChecked="False" Checked="Whoosh_Changed" Unchecked="Whoosh_Changed"/>
 
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
@@ -60,7 +64,7 @@
                                 <ColumnDefinition Width="70"/>
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
-                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                 <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
 
@@ -103,6 +107,11 @@
                             <Slider Grid.Row="7" Grid.Column="1" x:Name="DreadSlider" Minimum="0" Maximum="1" Value="0.4"
                                     ValueChanged="DreadSlider_Changed" VerticalAlignment="Center"/>
                             <TextBlock Grid.Row="7" Grid.Column="2" x:Name="DreadVal" Text="0.40" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="8" Grid.Column="0" Content="Whoosh-Lautstärke"/>
+                            <Slider Grid.Row="8" Grid.Column="1" x:Name="WhooshVolSlider" Minimum="0" Maximum="1" Value="0.35"
+                                    ValueChanged="WhooshVol_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="8" Grid.Column="2" x:Name="WhooshVolVal" Text="0.35" VerticalAlignment="Center"/>
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">

@@ -162,6 +162,9 @@ public partial class MainWindow : Window
         _director.BlackoutMaxSec = BlackMaxSlider.Value;
         _director.Dread = DreadSlider.Value;
         _director.MultiPhase = MultiPhaseChk.IsChecked == true;
+        _director.DayNightBias = DayNightChk.IsChecked == true;
+        _director.WhooshEnabled = WhooshChk.IsChecked == true;
+        _director.WhooshVolume = WhooshVolSlider.Value;
         _director.LightsEnabled = LightsChk.IsChecked == true;
         _director.LightObjectTitle = LightTitleBox.Text;
         _director.MothershipTitle = MothershipTitleBox.Text;
@@ -229,6 +232,22 @@ public partial class MainWindow : Window
     private void MultiPhase_Changed(object sender, RoutedEventArgs e)
     {
         if (_director != null) _director.MultiPhase = MultiPhaseChk.IsChecked == true;
+    }
+
+    private void DayNight_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) _director.DayNightBias = DayNightChk.IsChecked == true;
+    }
+
+    private void Whoosh_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) _director.WhooshEnabled = WhooshChk.IsChecked == true;
+    }
+
+    private void WhooshVol_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (WhooshVolVal != null) WhooshVolVal.Text = WhooshVolSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
+        if (_director != null) _director.WhooshVolume = WhooshVolSlider.Value;
     }
 
     private void DreadSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)

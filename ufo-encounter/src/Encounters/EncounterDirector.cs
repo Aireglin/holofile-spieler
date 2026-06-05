@@ -43,8 +43,13 @@ public sealed class EncounterDirector
     public double Dread { get; set; } = 0.4;
     /// <summary>Run encounters as multi-phase mini-stories.</summary>
     public bool MultiPhase { get; set; } = true;
-    /// <summary>Play the one-shot approach whoosh (currently off — too prominent).</summary>
+    /// <summary>Play the one-shot approach whoosh (off by default — too prominent).</summary>
     public bool WhooshEnabled { get; set; } = false;
+    /// <summary>Whoosh loudness 0..1 when enabled.</summary>
+    public double WhooshVolume { get; set; } = 0.35;
+    /// <summary>In random mode, bias scenario choice by time of day (night → lights,
+    /// day → solid/mothership).</summary>
+    public bool DayNightBias { get; set; } = true;
 
     public double BlackoutMinSec { get; set; } = 8;
     public double BlackoutMaxSec { get; set; } = 25;
@@ -98,7 +103,36 @@ public sealed class EncounterDirector
         ScheduleNext();
         if (IsEncounterActive) return;
         if (!CanTriggerNow()) { _trace?.Invoke("Skipped (realism-lock)."); return; }
-        await TriggerAsync(EncounterScenario.Catalog[_rng.Next(EncounterScenario.Catalog.Count)]);
+        await TriggerAsync(PickScenario());
+    }
+
+    /// <summary>Weighted random scenario pick. With day/night bias on, night
+    /// favours light-only scenarios and day favours the solid mothership.</summary>
+    private EncounterScenario PickScenario()
+    {
+        var cat = EncounterScenario.Catalog;
+        if (!DayNightBias) return cat[_rng.Next(cat.Count)];
+
+        int tod = (int)Math.Round(_sim.State.TimeOfDay); // 1=dawn 2=day 3=dusk 4=night
+        var weights = new double[cat.Count];
+        double total = 0;
+        for (int i = 0; i < cat.Count; i++)
+        {
+            double w = 1.0;
+            bool hasLights = cat[i].Lights is not null && !cat[i].Mothership;
+            if (tod == 4) w = cat[i].Mothership ? 0.6 : (hasLights ? 3.0 : 1.0); // night
+            else if (tod == 2) w = cat[i].Mothership ? 3.0 : 1.0;                 // day
+            weights[i] = w;
+            total += w;
+        }
+
+        double r = _rng.NextDouble() * total;
+        for (int i = 0; i < cat.Count; i++)
+        {
+            r -= weights[i];
+            if (r <= 0) return cat[i];
+        }
+        return cat[^1];
     }
 
     private bool CanTriggerNow()
@@ -146,7 +180,7 @@ public sealed class EncounterDirector
                 _proxTarget = ph.Proximity;
                 _subBassOn = ph.SubBass;
                 if (ph.Silence) { _proxTarget = 0; _subBassOn = false; _audio.HardSilence(); }
-                if (ph.Whoosh && WhooshEnabled) _audio.PlayWhoosh(0.35 + 0.35 * Dread);
+                if (ph.Whoosh && WhooshEnabled) _audio.PlayWhoosh(WhooshVolume);
 
                 if (LightsEnabled && ph.Light is LightPattern pat)
                 {
