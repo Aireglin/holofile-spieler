@@ -1,92 +1,107 @@
 using System.IO;
-using System.Media;
+using System.Windows.Media;
 
 namespace UfoEncounter.Audio;
 
 /// <summary>
-/// Plays a dull, low "hum" through the PC's default output. The waveform is
-/// synthesized in-memory (no audio files to ship) and looped with SoundPlayer.
-/// SoundPlayer has no volume control, so intensity is baked into the buffer.
+/// Multi-layer encounter audio. Each layer is a procedurally generated WAV
+/// (written to a temp file in the ctor) played through a WPF MediaPlayer, so we
+/// get real-time per-layer volume — used for distance-based loudness and for
+/// cueing sub-bass / static during phases. No external audio dependencies.
+///
+/// MUST be constructed and driven on the UI (Dispatcher) thread.
 /// </summary>
 public sealed class AudioEngine : IDisposable
 {
-    private const int SampleRate = 44100;
+    private readonly MediaPlayer _drone = new();
+    private readonly MediaPlayer _subBass = new();
+    private readonly MediaPlayer _static = new();
+    private readonly MediaPlayer _whoosh = new();
+    private readonly List<string> _tempFiles = new();
+    private bool _looping;
 
-    private SoundPlayer? _player;
-
-    /// <summary>
-    /// Start (or restart) the hum. <paramref name="intensity"/> 0..1 scales
-    /// loudness; <paramref name="baseHz"/> sets the fundamental (≈ 55–90 Hz
-    /// reads as a deep drone).
-    /// </summary>
-    public void StartHum(double intensity = 0.6, double baseHz = 70.0)
+    public AudioEngine()
     {
-        Stop();
-        intensity = Math.Clamp(intensity, 0.0, 1.0);
-        var wav = BuildHumWav(intensity, baseHz);
-        _player = new SoundPlayer(new MemoryStream(wav));
-        _player.PlayLooping();
+        OpenLoop(_drone, "ufo_drone.wav", WavSynth.Drone());
+        OpenLoop(_subBass, "ufo_subbass.wav", WavSynth.SubBass());
+        OpenLoop(_static, "ufo_static.wav", WavSynth.Static());
+        OpenOnce(_whoosh, "ufo_whoosh.wav", WavSynth.Whoosh());
+
+        foreach (var p in new[] { _drone, _subBass, _static, _whoosh }) p.Volume = 0;
     }
 
-    public void Stop()
+    private void OpenLoop(MediaPlayer p, string name, short[] pcm)
     {
-        _player?.Stop();
-        _player?.Dispose();
-        _player = null;
+        var path = WriteTemp(name, pcm);
+        p.MediaEnded += (_, _) => { p.Position = TimeSpan.Zero; p.Play(); };
+        p.Open(new Uri(path));
     }
 
-    /// <summary>One seamless ~2s loop: fundamental + sub-octave + a fifth, with
-    /// a slow tremolo and a touch of "beating" to keep it unsettling.</summary>
-    private static byte[] BuildHumWav(double intensity, double baseHz)
-    {
-        const double seconds = 2.0;
-        int n = (int)(SampleRate * seconds);
-        var pcm = new short[n];
+    private void OpenOnce(MediaPlayer p, string name, short[] pcm) =>
+        p.Open(new Uri(WriteTemp(name, pcm)));
 
-        double peak = 0.85 * intensity * short.MaxValue;
-        for (int i = 0; i < n; i++)
+    private string WriteTemp(string name, short[] pcm)
+    {
+        var path = Path.Combine(Path.GetTempPath(), name);
+        try { WavSynth.Write(path, pcm); } catch { /* fall through; player just stays silent */ }
+        _tempFiles.Add(path);
+        return path;
+    }
+
+    /// <summary>Begin (silent) playback of the looping layers.</summary>
+    public void StartLayers()
+    {
+        if (_looping) return;
+        _looping = true;
+        _drone.Position = TimeSpan.Zero; _drone.Play();
+        _subBass.Position = TimeSpan.Zero; _subBass.Play();
+        _static.Position = TimeSpan.Zero; _static.Play();
+    }
+
+    public void SetDroneVolume(double v) => _drone.Volume = Clamp(v);
+    public void SetSubBassVolume(double v) => _subBass.Volume = Clamp(v);
+    public void SetStaticVolume(double v) => _static.Volume = Clamp(v);
+
+    /// <summary>Fire the one-shot approach whoosh.</summary>
+    public void PlayWhoosh(double v)
+    {
+        _whoosh.Volume = Clamp(v);
+        _whoosh.Position = TimeSpan.Zero;
+        _whoosh.Play();
+    }
+
+    /// <summary>Snap every layer to silence immediately (the "sudden quiet").</summary>
+    public void HardSilence()
+    {
+        _drone.Volume = 0; _subBass.Volume = 0; _static.Volume = 0;
+    }
+
+    public void StopAll()
+    {
+        _looping = false;
+        foreach (var p in new[] { _drone, _subBass, _static, _whoosh })
         {
-            double t = (double)i / SampleRate;
-            // Loop-safe tremolo: whole number of cycles across the buffer.
-            double tremolo = 0.75 + 0.25 * Math.Sin(2 * Math.PI * (2.0 / seconds) * t);
-            double s =
-                  1.00 * Math.Sin(2 * Math.PI * baseHz * t)
-                + 0.55 * Math.Sin(2 * Math.PI * (baseHz / 2) * t)
-                + 0.30 * Math.Sin(2 * Math.PI * (baseHz * 1.5) * t)
-                + 0.12 * Math.Sin(2 * Math.PI * (baseHz + 1.0) * t); // beating
-            s /= 1.97; // normalize sum of weights
-            pcm[i] = (short)(s * tremolo * peak);
+            p.Volume = 0;
+            p.Stop();
         }
-
-        return WrapWav(pcm);
     }
 
-    private static byte[] WrapWav(short[] pcm)
+    // ---- Backwards-compatible simple hum (used by the Hum test button) ----
+    public void StartHum(double volume = 0.6, double baseHz = 68.0)
     {
-        using var ms = new MemoryStream();
-        using var w = new BinaryWriter(ms);
-        int dataBytes = pcm.Length * sizeof(short);
-        const short channels = 1, bitsPerSample = 16;
-        int byteRate = SampleRate * channels * bitsPerSample / 8;
-
-        w.Write("RIFF".ToCharArray());
-        w.Write(36 + dataBytes);
-        w.Write("WAVE".ToCharArray());
-        w.Write("fmt ".ToCharArray());
-        w.Write(16);                          // PCM chunk size
-        w.Write((short)1);                    // PCM
-        w.Write(channels);
-        w.Write(SampleRate);
-        w.Write(byteRate);
-        w.Write((short)(channels * bitsPerSample / 8)); // block align
-        w.Write(bitsPerSample);
-        w.Write("data".ToCharArray());
-        w.Write(dataBytes);
-        foreach (var s in pcm) w.Write(s);
-
-        w.Flush();
-        return ms.ToArray();
+        StartLayers();
+        SetDroneVolume(volume);
     }
 
-    public void Dispose() => Stop();
+    public void Stop() => StopAll();
+
+    private static double Clamp(double v) => Math.Clamp(v, 0.0, 1.0);
+
+    public void Dispose()
+    {
+        StopAll();
+        foreach (var p in new[] { _drone, _subBass, _static, _whoosh }) p.Close();
+        foreach (var f in _tempFiles)
+            try { if (File.Exists(f)) File.Delete(f); } catch { /* ignore */ }
+    }
 }

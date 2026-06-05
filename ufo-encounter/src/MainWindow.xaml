@@ -37,6 +37,7 @@
                         <Button Content="Blackout 6s" Click="TestBlackout_Click"/>
                         <Button Content="Stutter 6s" Click="TestStutter_Click"/>
                         <Button Content="Hum 6s" Click="TestHum_Click"/>
+                        <Button Content="▶ Mehrphasige Begegnung" Click="TestFullEncounter_Click"/>
                         <Button Content="⛔ PANIK-STOP" Click="Panic_Click"
                                 Background="#3A0A0A" Foreground="#FFAAAA"/>
                     </WrapPanel>
@@ -49,6 +50,8 @@
                                   Checked="RandomChk_Changed" Unchecked="RandomChk_Changed"/>
                         <CheckBox x:Name="RealismChk" Content="Realismus-Lock (keine Encounters am Boden / unter Min-AGL)"
                                   IsChecked="True" Checked="Realism_Changed" Unchecked="Realism_Changed"/>
+                        <CheckBox x:Name="MultiPhaseChk" Content="Mehrphasige Begegnungen (Annäherung → Beobachtung → Eskalation → Abgang)"
+                                  IsChecked="True" Checked="MultiPhase_Changed" Unchecked="MultiPhase_Changed"/>
 
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
@@ -57,7 +60,7 @@
                                 <ColumnDefinition Width="70"/>
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
-                                <RowDefinition/><RowDefinition/><RowDefinition/>
+                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                 <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
 
@@ -95,6 +98,11 @@
                             <Slider Grid.Row="6" Grid.Column="1" x:Name="BlackMaxSlider" Minimum="2" Maximum="120" Value="25"
                                     ValueChanged="BlackSlider_Changed" VerticalAlignment="Center"/>
                             <TextBlock Grid.Row="6" Grid.Column="2" x:Name="BlackMaxVal" Text="25" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="7" Grid.Column="0" Content="Dread (Anspannung)"/>
+                            <Slider Grid.Row="7" Grid.Column="1" x:Name="DreadSlider" Minimum="0" Maximum="1" Value="0.4"
+                                    ValueChanged="DreadSlider_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="7" Grid.Column="2" x:Name="DreadVal" Text="0.40" VerticalAlignment="Center"/>
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">

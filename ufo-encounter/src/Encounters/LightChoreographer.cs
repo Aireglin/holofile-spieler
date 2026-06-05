@@ -68,6 +68,8 @@ public sealed class LightChoreographer
     private string _title = "";
 
     public bool IsActive { get; private set; }
+    /// <summary>Distance (m) of the nearest spawned object, or null if none.</summary>
+    public double? NearestMeters { get; private set; }
 
     public LightChoreographer(SimConnectClient sim, Action<string>? log = null, Random? rng = null)
     {
@@ -106,6 +108,20 @@ public sealed class LightChoreographer
         _timer.Start();
     }
 
+    /// <summary>Switch the motion pattern live, keeping the spawned objects
+    /// (used for multi-phase encounters). Re-rolls variance and re-seeds anchors.</summary>
+    public void SetPattern(LightPattern pattern)
+    {
+        if (!IsActive) return;
+        _pattern = pattern;
+        _start = DateTime.UtcNow;
+        foreach (var l in _lights)
+        {
+            l.V = RollVars();
+            Seed(l);
+        }
+    }
+
     public void Stop()
     {
         _timer.Stop();
@@ -113,6 +129,7 @@ public sealed class LightChoreographer
             if (l.ObjectId is uint id) _sim.RemoveLight(id, l.Index);
         _lights.Clear();
         IsActive = false;
+        NearestMeters = null;
     }
 
     private Vars RollVars() => new()
@@ -146,11 +163,16 @@ public sealed class LightChoreographer
     {
         double t = (DateTime.UtcNow - _start).TotalSeconds;
         var p = _sim.State;
+        double? nearest = null;
         foreach (var l in _lights)
         {
             if (l.ObjectId is not uint id) continue;
-            _sim.MoveLight(id, ComposePose(p, OffsetFor(l, t), t, l.V));
+            var off = OffsetFor(l, t);
+            double d = Math.Sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]);
+            if (nearest is null || d < nearest) nearest = d;
+            _sim.MoveLight(id, ComposePose(p, off, t, l.V));
         }
+        NearestMeters = nearest;
     }
 
     /// <summary>Local offset (right, fwd, up in metres) for a light at time t.</summary>

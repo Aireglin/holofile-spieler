@@ -160,6 +160,8 @@ public partial class MainWindow : Window
         _director.RealismLock = RealismChk.IsChecked == true;
         _director.BlackoutMinSec = BlackMinSlider.Value;
         _director.BlackoutMaxSec = BlackMaxSlider.Value;
+        _director.Dread = DreadSlider.Value;
+        _director.MultiPhase = MultiPhaseChk.IsChecked == true;
         _director.LightsEnabled = LightsChk.IsChecked == true;
         _director.LightObjectTitle = LightTitleBox.Text;
         _director.MothershipTitle = MothershipTitleBox.Text;
@@ -222,6 +224,27 @@ public partial class MainWindow : Window
     private void Realism_Changed(object sender, RoutedEventArgs e)
     {
         if (_director != null) _director.RealismLock = RealismChk.IsChecked == true;
+    }
+
+    private void MultiPhase_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) _director.MultiPhase = MultiPhaseChk.IsChecked == true;
+    }
+
+    private void DreadSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (DreadVal != null) DreadVal.Text = DreadSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
+        if (_director != null) _director.Dread = DreadSlider.Value;
+    }
+
+    private async void TestFullEncounter_Click(object sender, RoutedEventArgs e)
+    {
+        if (_director == null) return;
+        // Force a multi-phase run for the test regardless of the toggle.
+        bool prev = _director.MultiPhase;
+        _director.MultiPhase = true;
+        try { await _director.TriggerAsync(EncounterScenario.ByName("Verfolger (Wingman)")); }
+        finally { _director.MultiPhase = prev; }
     }
 
     private void FreqSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)

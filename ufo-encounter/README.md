@@ -30,7 +30,16 @@ Pilot-/UAP-Berichte.
 - **Mutterschiff**: zwei Szenarien mit einem **massiven Objekt** (eigenes
   Titel-Feld), das weit entfernt lauert, sich langsam nähert und gelegentlich
   „unmöglich" umspringt — auch **bei Tag** sichtbar.
-- **Dumpfes Summen** (in-memory synthetisiert, keine Audiodateien nötig).
+- **Mehrschichtiger Sound** (prozedural synthetisiert, keine Audiodateien
+  nötig): Drone/Summen, pulsierender **Sub-Bass**, **Static/Knistern** bei
+  Stromausfall und ein **Anflug-Whoosh**. **Lautstärke nach Distanz** – der Mix
+  wird lauter, je näher das Objekt kommt.
+- **Mehrphasige Begegnungen**: Annäherung → Beobachtung → Eskalation → Abgang,
+  als kleine „Geschichte" statt eines flachen Effekts (abschaltbar).
+- **Dread-Regler** (Anspannung): steuert, wie nah/lang/aggressiv die Eskalation
+  wird – und die Wahrscheinlichkeit für …
+- **Signature-Events**: seltene (≈1,5–6,5 %, mit Dread steigend) Ausnahme-
+  Begegnungen – riesiges Mutterschiff, sehr nah, langer Deep-Blackout.
 - **Zufalls- oder Manuell-Modus**: Häufigkeit, Dauer (min/max) und Intensität
   per Slider; oder Encounter gezielt per Knopfdruck.
 - **Realismus-Lock**: keine Encounters am Boden oder unter einer einstellbaren
@@ -134,7 +143,9 @@ ufo-encounter/
    │  ├─ EncounterDirector.cs    # Dirigent: Auswahl, Timing, Random, Realism-Lock
    │  ├─ ElectricalDisruptor.cs  # Blackout/Stutter/Deep-Blackout + garant. Restore
    │  └─ LightChoreographer.cs   # spawnt & animiert Licht-SimObjects (experimentell)
-   ├─ Audio/AudioEngine.cs       # synthetisiertes Summen (WAV in-memory)
+   ├─ Audio/
+   │  ├─ AudioEngine.cs          # mehrschichtiger Mix (MediaPlayer, Echtzeit-Volume)
+   │  └─ WavSynth.cs             # erzeugt Drone/Sub-Bass/Static/Whoosh als WAV
    └─ Util/Logbook.cs            # Sichtungs-CSV
 ```
 
@@ -142,5 +153,6 @@ ufo-encounter/
 
 - **Lichter kalibrieren**: sinnvollen Default-SimObject-Titel + ggf. ein
   eigenes, lichtemittierendes Modell mitliefern; Lichtfarbe/Helligkeit.
+- **Sichtungsbericht-Export** als formatiertes Markdown/PDF (geplant).
 - Joystick-/Hotkey-Bindung für „Encounter jetzt" und Panik-Stop.
-- Sichtungsbericht-Export als formatiertes PDF/Markdown.
+- Tag/Nacht-Logik (nachts Licht-lastig, tags Mutterschiff bevorzugen).
