@@ -18,10 +18,13 @@ Pilot-/UAP-Berichte.
 - **Test-Buttons** für jedes Szenario *und* für Einzel-Effekte
   (Blackout / Stutter / Hum) — alles auf Abruf.
 - **Instrumentenausfall** über `TOGGLE_MASTER_BATTERY`, `TOGGLE_ALTERNATOR1/2`,
-  `TOGGLE_AVIONICS_MASTER`. Modi: **Blackout**, **Stutter** (an/aus/an/aus) und
-  **Total-Blackout** (alles aus; Strom kommt **zeitlich entkoppelt** vom
-  Encounter zurück, eigene Zufallsdauer via Slider). Strom wird **garantiert**
-  wieder eingeschaltet (auch bei Stop/Absturz/Beenden → Failsafe).
+  `TOGGLE_AVIONICS_MASTER`. Modi: **Blackout**, **Stutter** (jetzt mit
+  **unregelmäßigen** An-/Aus-Zeiten) und **Total-Blackout** (alles aus; Strom
+  kommt **zeitlich entkoppelt** zurück). Optional schaltet der Total-Blackout
+  auch den **Motor** ab (`ENGINE_AUTO_SHUTDOWN`) und startet ihn beim Restore
+  neu (`ENGINE_AUTO_START`). Strom/Motor werden **garantiert** wiederhergestellt
+  (Failsafe). Per **Ausfall-Wahrscheinlichkeit**-Slider passiert der Ausfall
+  nur in einem Teil der Begegnungen – mal Failure, mal nur Lichter.
 - **Licht-Choreografie** *(experimentell)*: spawnt Licht-SimObjects und lässt
   sie relativ zum Flugzeug tanzen — Muster **Tic-Tac, Wingman, Fly-by,
   Formation, Pop-up**. Jede Begegnung wird **zufällig variiert** (Tempo,

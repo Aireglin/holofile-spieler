@@ -111,7 +111,12 @@ public partial class MainWindow : Window
     // ---- Single-effect tests ----
 
     private async void TestBlackout_Click(object sender, RoutedEventArgs e) =>
-        await RunEffect(new DisruptionPlan { Kind = DisruptionKind.Blackout, Duration = TimeSpan.FromSeconds(6) });
+        await RunEffect(new DisruptionPlan
+        {
+            Kind = DisruptionKind.DeepBlackout,
+            Duration = TimeSpan.FromSeconds(8),
+            CutEngine = _director?.DeepBlackoutCutsEngine ?? true,
+        });
 
     private async void TestStutter_Click(object sender, RoutedEventArgs e) =>
         await RunEffect(new DisruptionPlan
@@ -165,6 +170,8 @@ public partial class MainWindow : Window
         _director.DayNightBias = DayNightChk.IsChecked == true;
         _director.WhooshEnabled = WhooshChk.IsChecked == true;
         _director.WhooshVolume = WhooshVolSlider.Value;
+        _director.DisruptionChance = DisruptChanceSlider.Value;
+        _director.DeepBlackoutCutsEngine = EngineCutChk.IsChecked == true;
         _director.LightsEnabled = LightsChk.IsChecked == true;
         _director.LightObjectTitle = LightTitleBox.Text;
         _director.MothershipTitle = MothershipTitleBox.Text;
@@ -248,6 +255,17 @@ public partial class MainWindow : Window
     {
         if (WhooshVolVal != null) WhooshVolVal.Text = WhooshVolSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
         if (_director != null) _director.WhooshVolume = WhooshVolSlider.Value;
+    }
+
+    private void EngineCut_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) _director.DeepBlackoutCutsEngine = EngineCutChk.IsChecked == true;
+    }
+
+    private void DisruptChance_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (DisruptChanceVal != null) DisruptChanceVal.Text = DisruptChanceSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
+        if (_director != null) _director.DisruptionChance = DisruptChanceSlider.Value;
     }
 
     private void DreadSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)

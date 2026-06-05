@@ -53,6 +53,11 @@ public sealed class EncounterDirector
 
     public double BlackoutMinSec { get; set; } = 8;
     public double BlackoutMaxSec { get; set; } = 25;
+    /// <summary>Probability (0..1) that an encounter's electrical effect actually
+    /// fires this run — so it's "sometimes a failure, sometimes just lights".</summary>
+    public double DisruptionChance { get; set; } = 0.75;
+    /// <summary>Total blackout also shuts the engine down (and auto-restarts it).</summary>
+    public bool DeepBlackoutCutsEngine { get; set; } = true;
 
     public string LightObjectTitle { get; set; } = "";
     public string MothershipTitle { get; set; } = "";
@@ -155,9 +160,11 @@ public sealed class EncounterDirector
 
         double visual = durationSec ?? RandomDuration();
         bool signature = _rng.NextDouble() < SignatureChance();
+        // Per-run roll: does the electrical effect fire at all this time?
+        bool allowElec = signature || _rng.NextDouble() < DisruptionChance;
         var phases = (MultiPhase || signature)
-            ? BuildMultiPhase(scenario, signature)
-            : BuildSinglePhase(scenario, visual);
+            ? BuildMultiPhase(scenario, signature, allowElec)
+            : BuildSinglePhase(scenario, visual, allowElec);
 
         var ct = (_current = new CancellationTokenSource()).Token;
         IsEncounterActive = true;
@@ -213,23 +220,25 @@ public sealed class EncounterDirector
 
     private double SignatureChance() => 0.015 + 0.05 * Dread; // ~1.5% .. 6.5%
 
-    private List<Phase> BuildSinglePhase(EncounterScenario s, double visual) => new()
+    private List<Phase> BuildSinglePhase(EncounterScenario s, double visual, bool allowElec) => new()
     {
-        new Phase("Encounter", visual, s.Lights, s.Disruption,
+        new Phase("Encounter", visual, s.Lights, allowElec ? s.Disruption : DisruptionKind.None,
             Proximity: s.Mothership ? 0.5 : 0.6, Whoosh: true, SubBass: s.Mothership, Silence: false),
     };
 
-    private List<Phase> BuildMultiPhase(EncounterScenario s, bool signature)
+    private List<Phase> BuildMultiPhase(EncounterScenario s, bool signature, bool allowElec)
     {
         double d = Dread;
         var approach = s.Mothership || signature ? LightPattern.Mothership : LightPattern.PopUp;
         var observe = s.Mothership || signature ? LightPattern.Mothership : LightPattern.Wingman;
         var climax = signature ? LightPattern.Mothership : (s.Lights ?? LightPattern.TicTac);
 
-        var escalationDisruption = signature
-            ? DisruptionKind.DeepBlackout
-            : (s.Disruption != DisruptionKind.None ? s.Disruption
-               : (d > 0.6 ? DisruptionKind.Stutter : DisruptionKind.None));
+        var escalationDisruption = !allowElec
+            ? DisruptionKind.None
+            : signature
+                ? DisruptionKind.DeepBlackout
+                : (s.Disruption != DisruptionKind.None ? s.Disruption
+                   : (d > 0.6 ? DisruptionKind.Stutter : DisruptionKind.None));
 
         double escDur = signature ? 16 + 12 * d : 4 + 8 * d;
 
@@ -259,6 +268,7 @@ public sealed class EncounterDirector
                 Kind = DisruptionKind.DeepBlackout,
                 StartDelay = TimeSpan.FromSeconds(_rng.NextDouble() * 3),
                 Duration = TimeSpan.FromSeconds(dur),
+                CutEngine = DeepBlackoutCutsEngine,
             };
         }
 

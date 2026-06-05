@@ -34,7 +34,7 @@
                 <!-- Direct effect tests -->
                 <GroupBox Header="EINZEL-EFFEKTE (Test)">
                     <WrapPanel>
-                        <Button Content="Blackout 6s" Click="TestBlackout_Click"/>
+                        <Button Content="Total-Blackout 8s" Click="TestBlackout_Click"/>
                         <Button Content="Stutter 6s" Click="TestStutter_Click"/>
                         <Button Content="Hum 6s" Click="TestHum_Click"/>
                         <Button Content="▶ Mehrphasige Begegnung" Click="TestFullEncounter_Click"/>
@@ -56,6 +56,8 @@
                                   IsChecked="True" Checked="DayNight_Changed" Unchecked="DayNight_Changed"/>
                         <CheckBox x:Name="WhooshChk" Content="Anflug-Whoosh abspielen"
                                   IsChecked="False" Checked="Whoosh_Changed" Unchecked="Whoosh_Changed"/>
+                        <CheckBox x:Name="EngineCutChk" Content="Motor im Total-Blackout abschalten (Auto-Restart beim Wiedereinschalten)"
+                                  IsChecked="True" Checked="EngineCut_Changed" Unchecked="EngineCut_Changed"/>
 
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
@@ -65,7 +67,7 @@
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
 
                             <Label Grid.Row="0" Grid.Column="0" Content="Häufigkeit (pro Min)"/>
@@ -112,6 +114,11 @@
                             <Slider Grid.Row="8" Grid.Column="1" x:Name="WhooshVolSlider" Minimum="0" Maximum="1" Value="0.35"
                                     ValueChanged="WhooshVol_Changed" VerticalAlignment="Center"/>
                             <TextBlock Grid.Row="8" Grid.Column="2" x:Name="WhooshVolVal" Text="0.35" VerticalAlignment="Center"/>
+
+                            <Label Grid.Row="9" Grid.Column="0" Content="Ausfall-Wahrscheinlichkeit"/>
+                            <Slider Grid.Row="9" Grid.Column="1" x:Name="DisruptChanceSlider" Minimum="0" Maximum="1" Value="0.75"
+                                    ValueChanged="DisruptChance_Changed" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="9" Grid.Column="2" x:Name="DisruptChanceVal" Text="0.75" VerticalAlignment="Center"/>
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">

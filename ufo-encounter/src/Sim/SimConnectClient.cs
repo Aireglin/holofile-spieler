@@ -69,6 +69,9 @@ public sealed class SimConnectClient : IDisposable
         TOGGLE_ALTERNATOR2,
         TOGGLE_MASTER_ALTERNATOR,
         TOGGLE_AVIONICS_MASTER,
+        // Engine kill / restart (used by the deep blackout's optional engine cut).
+        ENGINE_AUTO_SHUTDOWN,
+        ENGINE_AUTO_START,
         // Freeze a spawned object so the sim's physics leaves our writes alone.
         FREEZE_LATITUDE_LONGITUDE_SET,
         FREEZE_ALTITUDE_SET,
