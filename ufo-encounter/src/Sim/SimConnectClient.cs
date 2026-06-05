@@ -204,7 +204,7 @@ public sealed class SimConnectClient : IDisposable
         };
         try
         {
-            _sim.AICreateSimObject(title, init, (REQUEST)((uint)REQUEST.LightBase + lightIndex));
+            _sim.AICreateSimulatedObject(title, init, (REQUEST)((uint)REQUEST.LightBase + lightIndex));
         }
         catch (COMException ex)
         {
