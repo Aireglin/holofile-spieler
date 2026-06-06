@@ -66,6 +66,9 @@ public sealed class EncounterDirector
     public string MothershipTitle { get; set; } = "";
     public int LightCount { get; set; } = 2;
     public bool LightsEnabled { get; set; } = true;
+    /// <summary>Spawn objects as aircraft (AICreateNonATCAircraft) — needed for
+    /// titles that are aircraft (e.g. a flyable UFO).</summary>
+    public bool SpawnAsAircraft { get; set; } = false;
 
     public bool IsRandomMode => _scheduler.IsEnabled;
     public bool IsEncounterActive { get; private set; }
@@ -194,7 +197,7 @@ public sealed class EncounterDirector
 
                 if (LightsEnabled && ph.Light is LightPattern pat)
                 {
-                    if (!lightsStarted) { _lights.Start(pat, mothership ? 1 : LightCount, ph.Dur, title); lightsStarted = true; }
+                    if (!lightsStarted) { _lights.Start(pat, mothership ? 1 : LightCount, ph.Dur, title, SpawnAsAircraft); lightsStarted = true; }
                     else _lights.SetPattern(pat);
                 }
 
@@ -313,7 +316,7 @@ public sealed class EncounterDirector
     {
         if (!LightsEnabled) { _trace?.Invoke("Lights are disabled."); return; }
         string title = mothership ? MothershipTitle : LightObjectTitle;
-        _lights.Start(pattern, mothership ? 1 : LightCount, durationSec, title);
+        _lights.Start(pattern, mothership ? 1 : LightCount, durationSec, title, SpawnAsAircraft);
         Task.Delay(TimeSpan.FromSeconds(durationSec)).ContinueWith(
             _ => _lights.Stop(), TaskScheduler.FromCurrentSynchronizationContext());
     }

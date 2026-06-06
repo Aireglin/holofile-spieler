@@ -54,7 +54,8 @@ public partial class MainWindow : Window
             EncounterText.Text = active ? $" ▶ {name}" : " idle";
 
         BuildScenarioButtons();
-        PushSettingsToDirector();
+        LoadSettings();          // apply persisted settings to the controls...
+        PushSettingsToDirector();// ...and sync them to the director
 
         // Try to attach to a running sim, and keep retrying quietly.
         _reconnect = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -176,6 +177,7 @@ public partial class MainWindow : Window
         _director.LightObjectTitle = LightTitleBox.Text;
         _director.MothershipTitle = MothershipTitleBox.Text;
         _director.LightCount = (int)LightCountSlider.Value;
+        _director.SpawnAsAircraft = AircraftChk.IsChecked == true;
     }
 
     // Which field a pending "use current aircraft" request should fill.
@@ -211,6 +213,11 @@ public partial class MainWindow : Window
     private void Lights_Changed(object sender, RoutedEventArgs e)
     {
         if (_director != null) _director.LightsEnabled = LightsChk.IsChecked == true;
+    }
+
+    private void Aircraft_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) _director.SpawnAsAircraft = AircraftChk.IsChecked == true;
     }
 
     private void LightTitle_Changed(object sender, TextChangedEventArgs e)
@@ -329,8 +336,62 @@ public partial class MainWindow : Window
         Trace(File.Exists(path) ? $"Sightings: {path}" : "No sightings recorded yet.");
     }
 
+    // ---- Settings persistence ----
+
+    private void LoadSettings()
+    {
+        var s = SettingsStore.Load();
+        FreqSlider.Value = s.Frequency;
+        MinDurSlider.Value = s.MinDuration;
+        MaxDurSlider.Value = s.MaxDuration;
+        IntensitySlider.Value = s.Intensity;
+        AglSlider.Value = s.MinAgl;
+        BlackMinSlider.Value = s.BlackoutMin;
+        BlackMaxSlider.Value = s.BlackoutMax;
+        DreadSlider.Value = s.Dread;
+        WhooshVolSlider.Value = s.WhooshVolume;
+        DisruptChanceSlider.Value = s.DisruptionChance;
+        LightCountSlider.Value = s.LightCount;
+
+        MultiPhaseChk.IsChecked = s.MultiPhase;
+        DayNightChk.IsChecked = s.DayNight;
+        WhooshChk.IsChecked = s.Whoosh;
+        EngineCutChk.IsChecked = s.EngineCut;
+        RealismChk.IsChecked = s.Realism;
+        LightsChk.IsChecked = s.LightsEnabled;
+        AircraftChk.IsChecked = s.SpawnAsAircraft;
+
+        LightTitleBox.Text = s.LightTitle;
+        MothershipTitleBox.Text = s.MothershipTitle;
+    }
+
+    private void SaveSettings() => SettingsStore.Save(new AppSettings
+    {
+        Frequency = FreqSlider.Value,
+        MinDuration = MinDurSlider.Value,
+        MaxDuration = MaxDurSlider.Value,
+        Intensity = IntensitySlider.Value,
+        MinAgl = AglSlider.Value,
+        BlackoutMin = BlackMinSlider.Value,
+        BlackoutMax = BlackMaxSlider.Value,
+        Dread = DreadSlider.Value,
+        WhooshVolume = WhooshVolSlider.Value,
+        DisruptionChance = DisruptChanceSlider.Value,
+        LightCount = (int)LightCountSlider.Value,
+        MultiPhase = MultiPhaseChk.IsChecked == true,
+        DayNight = DayNightChk.IsChecked == true,
+        Whoosh = WhooshChk.IsChecked == true,
+        EngineCut = EngineCutChk.IsChecked == true,
+        Realism = RealismChk.IsChecked == true,
+        LightsEnabled = LightsChk.IsChecked == true,
+        SpawnAsAircraft = AircraftChk.IsChecked == true,
+        LightTitle = LightTitleBox.Text,
+        MothershipTitle = MothershipTitleBox.Text,
+    });
+
     protected override void OnClosed(EventArgs e)
     {
+        SaveSettings();
         // Failsafe on exit: stop everything and restore power.
         _director?.PanicStop();
         _audio?.Dispose();

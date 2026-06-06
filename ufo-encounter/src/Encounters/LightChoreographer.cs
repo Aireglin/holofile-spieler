@@ -68,6 +68,7 @@ public sealed class LightChoreographer
     private double _durationSec;
     private DateTime _start;
     private string _title = "";
+    private bool _asAircraft;
     private long _frame;
 
     public bool IsActive { get; private set; }
@@ -84,7 +85,7 @@ public sealed class LightChoreographer
         _sim.ObjectAssigned += OnObjectAssigned;
     }
 
-    public void Start(LightPattern pattern, int count, double durationSec, string title)
+    public void Start(LightPattern pattern, int count, double durationSec, string title, bool asAircraft = false)
     {
         if (!_sim.IsConnected) { _log?.Invoke("Lights: not connected."); return; }
         if (string.IsNullOrWhiteSpace(title)) { _log?.Invoke("Lights: no SimObject title set."); return; }
@@ -95,6 +96,7 @@ public sealed class LightChoreographer
         _pattern = pattern;
         _durationSec = durationSec;
         _title = title;
+        _asAircraft = asAircraft;
         _start = DateTime.UtcNow;
         IsActive = true;
 
@@ -105,7 +107,7 @@ public sealed class LightChoreographer
             var light = new Light { Index = i, V = RollVars() };
             Seed(light);
             _lights.Add(light);
-            _sim.SpawnLight(_title, ComposePose(p, light.Current, 0, light.V), i);
+            _sim.SpawnLight(_title, ComposePose(p, light.Current, 0, light.V), i, _asAircraft);
         }
         _log?.Invoke($"Lights: spawning {count}× '{_title}' ({pattern}).");
         _timer.Start();

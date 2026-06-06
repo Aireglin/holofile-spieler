@@ -137,6 +137,8 @@
                     <StackPanel>
                         <CheckBox x:Name="LightsChk" Content="Lichter aktiv" IsChecked="True"
                                   Checked="Lights_Changed" Unchecked="Lights_Changed"/>
+                        <CheckBox x:Name="AircraftChk" Content="Objekte sind Flugzeuge (z. B. flugbares UFO) — Aircraft-Spawn verwenden"
+                                  IsChecked="False" Checked="Aircraft_Changed" Unchecked="Aircraft_Changed"/>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                             <Label Content="Licht-Titel:" VerticalAlignment="Center" Width="100"/>
                             <TextBox x:Name="LightTitleBox" Width="240" Margin="4" Background="{StaticResource Panel}"

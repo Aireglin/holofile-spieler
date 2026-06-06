@@ -198,8 +198,9 @@ public sealed class SimConnectClient : IDisposable
     // ---- Light SimObjects ----
 
     /// <summary>Spawn a SimObject. <paramref name="lightIndex"/> keys the request
-    /// id so the assigned object id can be matched back.</summary>
-    public void SpawnLight(string title, ObjectPose pose, uint lightIndex)
+    /// id so the assigned object id can be matched back. Set <paramref name="asAircraft"/>
+    /// for objects that are aircraft (uses AICreateNonATCAircraft).</summary>
+    public void SpawnLight(string title, ObjectPose pose, uint lightIndex, bool asAircraft)
     {
         if (_sim == null) return;
         var init = new SIMCONNECT_DATA_INITPOSITION
@@ -213,9 +214,13 @@ public sealed class SimConnectClient : IDisposable
             OnGround = 0,
             Airspeed = 0,
         };
+        var req = (REQUEST)((uint)REQUEST.LightBase + lightIndex);
         try
         {
-            _sim.AICreateSimulatedObject(title, init, (REQUEST)((uint)REQUEST.LightBase + lightIndex));
+            if (asAircraft)
+                _sim.AICreateNonATCAircraft(title, $"UFO{lightIndex}", init, req);
+            else
+                _sim.AICreateSimulatedObject(title, init, req);
         }
         catch (COMException ex)
         {
