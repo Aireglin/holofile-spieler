@@ -178,6 +178,7 @@ public partial class MainWindow : Window
         _director.MothershipTitle = MothershipTitleBox.Text;
         _director.LightCount = (int)LightCountSlider.Value;
         _director.SpawnAsAircraft = AircraftChk.IsChecked == true;
+        if (_lights != null) _lights.MinDistanceMeters = MinDistSlider.Value;
     }
 
     // Which field a pending "use current aircraft" request should fill.
@@ -218,6 +219,12 @@ public partial class MainWindow : Window
     private void Aircraft_Changed(object sender, RoutedEventArgs e)
     {
         if (_director != null) _director.SpawnAsAircraft = AircraftChk.IsChecked == true;
+    }
+
+    private void MinDist_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (MinDistVal != null) MinDistVal.Text = MinDistSlider.Value.ToString("0", CultureInfo.InvariantCulture);
+        if (_lights != null) _lights.MinDistanceMeters = MinDistSlider.Value;
     }
 
     private void LightTitle_Changed(object sender, TextChangedEventArgs e)
@@ -363,6 +370,7 @@ public partial class MainWindow : Window
 
         LightTitleBox.Text = s.LightTitle;
         MothershipTitleBox.Text = s.MothershipTitle;
+        MinDistSlider.Value = s.MinDistance;
     }
 
     private void SaveSettings() => SettingsStore.Save(new AppSettings
@@ -387,6 +395,7 @@ public partial class MainWindow : Window
         SpawnAsAircraft = AircraftChk.IsChecked == true,
         LightTitle = LightTitleBox.Text,
         MothershipTitle = MothershipTitleBox.Text,
+        MinDistance = MinDistSlider.Value,
     });
 
     protected override void OnClosed(EventArgs e)

@@ -74,6 +74,8 @@ public sealed class LightChoreographer
     public bool IsActive { get; private set; }
     /// <summary>Distance (m) of the nearest spawned object, or null if none.</summary>
     public double? NearestMeters { get; private set; }
+    /// <summary>Never let an object come closer than this (metres); 0 = no limit.</summary>
+    public double MinDistanceMeters { get; set; }
 
     public LightChoreographer(SimConnectClient sim, Action<string>? log = null, Random? rng = null)
     {
@@ -192,9 +194,20 @@ public sealed class LightChoreographer
                 off = l.Smoothed;
             }
 
-            double d = Math.Sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]);
+            // Optionally keep objects beyond a minimum distance (avoids the
+            // close-range stutter; reads as a more distant sighting). Work on a
+            // copy so we don't corrupt the stored anchor/smoothed state.
+            double[] sent = { off[0], off[1], off[2] };
+            double d = Math.Sqrt(sent[0] * sent[0] + sent[1] * sent[1] + sent[2] * sent[2]);
+            if (MinDistanceMeters > 1 && d < MinDistanceMeters)
+            {
+                if (d > 1) { double s = MinDistanceMeters / d; sent[0] *= s; sent[1] *= s; sent[2] *= s; }
+                else { sent[1] = MinDistanceMeters; } // degenerate: push straight ahead
+                d = MinDistanceMeters;
+            }
+
             if (nearest is null || d < nearest) nearest = d;
-            _sim.MoveLight(id, ComposePose(p, off, t, l.V));
+            _sim.MoveLight(id, ComposePose(p, sent, t, l.V));
         }
         NearestMeters = nearest;
     }
