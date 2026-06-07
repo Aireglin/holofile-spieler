@@ -92,6 +92,32 @@ internal static class WavSynth
         return pcm;
     }
 
+    /// <summary>One-shot "jumpscare": a short, bright high cluster like striking
+    /// the top piano keys (capped ~3.1 kHz so it startles without hurting).</summary>
+    public static short[] Jumpscare()
+    {
+        const double seconds = 0.9;
+        int n = (int)(SampleRate * seconds);
+        var pcm = new short[n];
+        double[] freqs = { 2093, 2349, 2637, 3136 }; // C7, D7, E7, G7
+        double peak = 0.55 * short.MaxValue;
+        for (int i = 0; i < n; i++)
+        {
+            double t = (double)i / SampleRate;
+            double s = 0;
+            for (int k = 0; k < freqs.Length; k++)
+            {
+                double onset = k * 0.045;          // quick arpeggio "strike"
+                if (t < onset) continue;
+                double dt = t - onset;
+                double env = Math.Exp(-dt * 6.5);  // fast decay
+                s += env * Math.Sin(2 * Math.PI * freqs[k] * dt);
+            }
+            pcm[i] = (short)(s / freqs.Length * peak);
+        }
+        return pcm;
+    }
+
     /// <summary>Write a mono 16-bit PCM WAV to <paramref name="path"/>.</summary>
     public static void Write(string path, short[] pcm)
     {

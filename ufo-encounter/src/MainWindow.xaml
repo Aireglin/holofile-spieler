@@ -183,6 +183,33 @@
                         </WrapPanel>
                     </StackPanel>
                 </GroupBox>
+
+                <!-- Holy Grail -->
+                <GroupBox Header="HOLY GRAIL (Tempus Fugit)">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <Label Content="Strahl-Titel:" VerticalAlignment="Center" Width="100"/>
+                            <TextBox x:Name="BeamTitleBox" Width="240" Margin="4" Background="{StaticResource Panel}"
+                                     Foreground="{StaticResource Text}" TextChanged="BeamTitle_Changed"
+                                     ToolTip="Helles Licht-Objekt für den Strahl über dem Flugzeug. Leer = Mutterschiff-/Licht-Titel."/>
+                            <Button Content="Aktuelles Flugzeug übernehmen" Click="UseCurrentForBeam_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Label Content="Strahl-Objekte:" VerticalAlignment="Center"/>
+                            <Slider x:Name="BeamCountSlider" Minimum="1" Maximum="6" Value="3" Width="140"
+                                    IsSnapToTickEnabled="True" TickFrequency="1"
+                                    ValueChanged="BeamCount_Changed" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="BeamCountVal" Text="3" VerticalAlignment="Center" Margin="6,0"/>
+                            <Label Content="Höhe (m):" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                            <Slider x:Name="BeamHeightSlider" Minimum="10" Maximum="80" Value="30" Width="140"
+                                    ValueChanged="BeamHeight_Changed" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="BeamHeightVal" Text="30" VerticalAlignment="Center" Margin="6,0"/>
+                        </StackPanel>
+                        <WrapPanel Margin="0,4,0,0">
+                            <Button Content="▶ Holy Grail" Click="TestHolyGrail_Click"/>
+                        </WrapPanel>
+                    </StackPanel>
+                </GroupBox>
             </StackPanel>
         </ScrollViewer>
 

@@ -17,6 +17,7 @@ public sealed class AudioEngine : IDisposable
     private readonly MediaPlayer _subBass = new();
     private readonly MediaPlayer _static = new();
     private readonly MediaPlayer _whoosh = new();
+    private readonly MediaPlayer _jumpscare = new();
     private readonly List<string> _tempFiles = new();
     private bool _looping;
 
@@ -26,8 +27,9 @@ public sealed class AudioEngine : IDisposable
         OpenLoop(_subBass, "ufo_subbass.wav", WavSynth.SubBass());
         OpenLoop(_static, "ufo_static.wav", WavSynth.Static());
         OpenOnce(_whoosh, "ufo_whoosh.wav", WavSynth.Whoosh());
+        OpenOnce(_jumpscare, "ufo_jumpscare.wav", WavSynth.Jumpscare());
 
-        foreach (var p in new[] { _drone, _subBass, _static, _whoosh }) p.Volume = 0;
+        foreach (var p in new[] { _drone, _subBass, _static, _whoosh, _jumpscare }) p.Volume = 0;
     }
 
     private void OpenLoop(MediaPlayer p, string name, short[] pcm)
@@ -70,6 +72,14 @@ public sealed class AudioEngine : IDisposable
         _whoosh.Play();
     }
 
+    /// <summary>Fire the one-shot high-frequency "jumpscare" cluster.</summary>
+    public void PlayJumpscare(double v)
+    {
+        _jumpscare.Volume = Clamp(v);
+        _jumpscare.Position = TimeSpan.Zero;
+        _jumpscare.Play();
+    }
+
     /// <summary>Snap every layer to silence immediately (the "sudden quiet").</summary>
     public void HardSilence()
     {
@@ -100,7 +110,7 @@ public sealed class AudioEngine : IDisposable
     public void Dispose()
     {
         StopAll();
-        foreach (var p in new[] { _drone, _subBass, _static, _whoosh }) p.Close();
+        foreach (var p in new[] { _drone, _subBass, _static, _whoosh, _jumpscare }) p.Close();
         foreach (var f in _tempFiles)
             try { if (File.Exists(f)) File.Delete(f); } catch { /* ignore */ }
     }

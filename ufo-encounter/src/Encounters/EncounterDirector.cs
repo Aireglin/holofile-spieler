@@ -70,6 +70,11 @@ public sealed class EncounterDirector
     /// titles that are aircraft (e.g. a flyable UFO).</summary>
     public bool SpawnAsAircraft { get; set; } = false;
 
+    // Holy Grail "beam" — bright object(s) hovering above the aircraft.
+    public string BeamTitle { get; set; } = "";
+    public int BeamCount { get; set; } = 3;
+    public double BeamHeight { get; set; } = 30;
+
     public bool IsRandomMode => _scheduler.IsEnabled;
     public bool IsEncounterActive { get; private set; }
 
@@ -166,6 +171,8 @@ public sealed class EncounterDirector
 
         double visual = durationSec ?? RandomDuration();
         bool signature = _rng.NextDouble() < SignatureChance();
+        // A signature event sometimes becomes the full "Holy Grail".
+        if (signature && _rng.NextDouble() < 0.5) { await RunHolyGrailAsync(); return; }
         // Per-run roll: does the electrical effect fire at all this time?
         bool allowElec = signature || _rng.NextDouble() < DisruptionChance;
         var phases = (MultiPhase || signature)
@@ -333,6 +340,84 @@ public sealed class EncounterDirector
     }
 
     private static double Lerp(double a, double b, double k) => a + (b - a) * k;
+
+    /// <summary>The "Holy Grail" (Tempus Fugit): UFO dances → vanishes →
+    /// power + engine die in the dark → a bright beam appears overhead with a
+    /// jumpscare, hovers in total silence → vanishes → systems restart.</summary>
+    public async Task RunHolyGrailAsync()
+    {
+        if (IsEncounterActive) return;
+        if (!_sim.IsConnected) { _trace?.Invoke("Holy Grail: not connected."); return; }
+        if (_sim.State.OnGround > 0.5) { _trace?.Invoke("Holy Grail: skipped (on ground)."); return; }
+        if (_sim.State.AltitudeAgl < 1000)
+            _trace?.Invoke("⚠ Holy Grail: Motor wird abgeschaltet — auf ausreichende Höhe achten!");
+        var ct = (_current = new CancellationTokenSource()).Token;
+        IsEncounterActive = true;
+        EncounterStateChanged?.Invoke("Holy Grail", true);
+        _trace?.Invoke("✦✦ HOLY GRAIL (Tempus Fugit) ✦✦");
+        _log.Record("Holy Grail ✦✦", _sim.State);
+
+        double savedMin = _lights.MinDistanceMeters;
+        Task elec = Task.CompletedTask;
+        try
+        {
+            // 1) UFO appears and dances; electronics MAY misbehave.
+            _audio.StartLayers();
+            _audio.SetDroneVolume(Math.Clamp(0.55 * (0.4 + 0.6 * Intensity), 0, 1));
+            _audio.SetSubBassVolume(0.4);
+            string ufoTitle = !string.IsNullOrWhiteSpace(LightObjectTitle) ? LightObjectTitle : MothershipTitle;
+            if (LightsEnabled) _lights.Start(LightPattern.PopUp, Math.Max(1, LightCount), 8, ufoTitle, SpawnAsAircraft);
+            if (_rng.NextDouble() < 0.5)
+                elec = _disruptor.RunAsync(new DisruptionPlan
+                {
+                    Kind = DisruptionKind.Stutter,
+                    Duration = TimeSpan.FromSeconds(5),
+                    StutterStep = TimeSpan.FromMilliseconds(300),
+                }, ct);
+            await Task.Delay(TimeSpan.FromSeconds(8), ct);
+
+            // 2) UFO suddenly gone; brief quiet.
+            _lights.Stop();
+            try { await elec; } catch (OperationCanceledException) { }
+            _audio.HardSilence();
+
+            // 3) Power AND engine fail for certain; dramatic dark seconds.
+            double darkBefore = 4 + 2 * _rng.NextDouble();
+            double beamDur = 5 + 2 * _rng.NextDouble();
+            elec = _disruptor.RunAsync(new DisruptionPlan
+            {
+                Kind = DisruptionKind.DeepBlackout,
+                Duration = TimeSpan.FromSeconds(darkBefore + beamDur + 1.0), // restore just after the beam
+                CutEngine = true,
+            }, ct);
+            await Task.Delay(TimeSpan.FromSeconds(darkBefore), ct);
+
+            // 4) The beam appears overhead + the jumpscare. Total silence otherwise.
+            _audio.PlayJumpscare(0.5);
+            string beamTitle = !string.IsNullOrWhiteSpace(BeamTitle) ? BeamTitle
+                : (!string.IsNullOrWhiteSpace(MothershipTitle) ? MothershipTitle : LightObjectTitle);
+            _lights.MinDistanceMeters = 0;            // the beam must stay close above
+            _lights.BeamHeight = BeamHeight;
+            if (LightsEnabled) _lights.Start(LightPattern.Beam, Math.Max(1, BeamCount), beamDur, beamTitle, SpawnAsAircraft);
+            await Task.Delay(TimeSpan.FromSeconds(beamDur), ct);
+
+            // 5) Beam suddenly gone.
+            _lights.Stop();
+
+            // 6) Systems restart (the deep blackout restores power + engine).
+            try { await elec; } catch (OperationCanceledException) { }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _lights.MinDistanceMeters = savedMin;
+            _audio.StopAll();
+            _lights.Stop();
+            IsEncounterActive = false;
+            EncounterStateChanged?.Invoke("Holy Grail", false);
+            _trace?.Invoke("■ Holy Grail ended.");
+        }
+    }
 
     /// <summary>Spawn lights on their own for a quick visual test.</summary>
     public void TestLights(LightPattern pattern, double durationSec, bool mothership = false)

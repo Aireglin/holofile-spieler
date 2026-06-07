@@ -189,6 +189,9 @@ public partial class MainWindow : Window
         _director.MothershipTitle = MothershipTitleBox.Text;
         _director.LightCount = (int)LightCountSlider.Value;
         _director.SpawnAsAircraft = AircraftChk.IsChecked == true;
+        _director.BeamTitle = BeamTitleBox.Text;
+        _director.BeamCount = (int)BeamCountSlider.Value;
+        _director.BeamHeight = BeamHeightSlider.Value;
         if (_lights != null)
         {
             _lights.MinDistanceMeters = MinDistSlider.Value;
@@ -216,6 +219,30 @@ public partial class MainWindow : Window
 
     private void TestMothership_Click(object sender, RoutedEventArgs e) =>
         _director?.TestLights(LightPattern.Mothership, 20, mothership: true);
+
+    private void UseCurrentForBeam_Click(object sender, RoutedEventArgs e) => RequestTitleInto(BeamTitleBox);
+
+    private void BeamTitle_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_director != null) _director.BeamTitle = BeamTitleBox.Text;
+    }
+
+    private void BeamCount_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (BeamCountVal != null) BeamCountVal.Text = ((int)BeamCountSlider.Value).ToString();
+        if (_director != null) _director.BeamCount = (int)BeamCountSlider.Value;
+    }
+
+    private void BeamHeight_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (BeamHeightVal != null) BeamHeightVal.Text = BeamHeightSlider.Value.ToString("0", CultureInfo.InvariantCulture);
+        if (_director != null) _director.BeamHeight = BeamHeightSlider.Value;
+    }
+
+    private async void TestHolyGrail_Click(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) await _director.RunHolyGrailAsync();
+    }
 
     private void BlackSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -393,6 +420,9 @@ public partial class MainWindow : Window
         MothershipTitleBox.Text = s.MothershipTitle;
         MinDistSlider.Value = s.MinDistance;
         SpeedSlider.Value = s.SpeedScale;
+        BeamTitleBox.Text = s.BeamTitle;
+        BeamCountSlider.Value = s.BeamCount;
+        BeamHeightSlider.Value = s.BeamHeight;
     }
 
     private void SaveSettings() => SettingsStore.Save(new AppSettings
@@ -419,6 +449,9 @@ public partial class MainWindow : Window
         MothershipTitle = MothershipTitleBox.Text,
         MinDistance = MinDistSlider.Value,
         SpeedScale = SpeedSlider.Value,
+        BeamTitle = BeamTitleBox.Text,
+        BeamCount = (int)BeamCountSlider.Value,
+        BeamHeight = BeamHeightSlider.Value,
     });
 
     protected override void OnClosed(EventArgs e)

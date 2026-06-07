@@ -30,6 +30,9 @@ public sealed class AppSettings
     public int LightCount { get; set; } = 2;
     public double MinDistance { get; set; }
     public double SpeedScale { get; set; } = 0.6;
+    public string BeamTitle { get; set; } = "";
+    public int BeamCount { get; set; } = 3;
+    public double BeamHeight { get; set; } = 30;
 }
 
 /// <summary>Loads/saves <see cref="AppSettings"/> as JSON next to the executable.</summary>

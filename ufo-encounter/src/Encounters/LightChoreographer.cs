@@ -15,6 +15,9 @@ public enum LightPattern
     Formation,
     /// <summary>Pops up ahead and dances in tight loops.</summary>
     PopUp,
+    /// <summary>Hovers in a tight cluster directly above the aircraft (the
+    /// "beam" — its objects' own lights bathe the plane from above).</summary>
+    Beam,
     /// <summary>A single massive object: slow, looming, with occasional
     /// "impossible" instantaneous repositions. Reads well by day.</summary>
     Mothership,
@@ -79,6 +82,8 @@ public sealed class LightChoreographer
     /// <summary>Global movement-speed multiplier (lower = slower, so the sim keeps
     /// up and motion stutters less). ~0.6 is a good default.</summary>
     public double SpeedScale { get; set; } = 0.6;
+    /// <summary>Height (metres) of the Beam cluster above the aircraft.</summary>
+    public double BeamHeight { get; set; } = 30;
 
     public LightChoreographer(SimConnectClient sim, Action<string>? log = null, Random? rng = null)
     {
@@ -164,6 +169,7 @@ public sealed class LightChoreographer
     private void Seed(Light l)
     {
         if (_pattern == LightPattern.Mothership) JumpMothership(l, 0);
+        else if (_pattern == LightPattern.Beam) { l.Current[0] = 0; l.Current[1] = 0; l.Current[2] = BeamHeight; }
         else JumpTicTac(l, 0);
     }
 
@@ -292,6 +298,20 @@ public sealed class LightChoreographer
                     l.Current[1] + 420 * Math.Sin(ts * 0.035) + 170 * wf,
                     l.Current[2] + 130 * Math.Sin(ts * 0.045 + ph) + 90 * wu,
                 };
+
+            case LightPattern.Beam:
+            {
+                // Tight cluster directly overhead; barely moving. Several objects
+                // spread in a small ring widen the lit footprint.
+                double ang = ph + idx * (2 * Math.PI / Math.Max(1, n));
+                double ringR = 6 + 7 * idx;
+                return new[]
+                {
+                    ringR * Math.Cos(ang) + 3 * wr,
+                    ringR * Math.Sin(ang) + 3 * wf,
+                    BeamHeight + 2 * Math.Sin(ts * 0.3 + ph),
+                };
+            }
 
             case LightPattern.TicTac:
             default:
