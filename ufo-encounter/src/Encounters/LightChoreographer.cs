@@ -80,7 +80,7 @@ public sealed class LightChoreographer
         _sim = sim;
         _log = log;
         _rng = rng ?? new Random();
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) }; // ~50 Hz
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) }; // ~60 Hz
         _timer.Tick += OnTick;
         _sim.ObjectAssigned += OnObjectAssigned;
     }
@@ -161,7 +161,7 @@ public sealed class LightChoreographer
         var light = _lights.Find(l => l.Index == lightIndex);
         if (light == null) { _sim.RemoveLight(objectId, lightIndex); return; } // stale
         light.ObjectId = objectId;
-        _sim.FreezeLight(objectId);
+        _sim.ReleaseAndFreeze(objectId, lightIndex);
     }
 
     private void OnTick(object? sender, EventArgs e)

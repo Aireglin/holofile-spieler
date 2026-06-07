@@ -58,7 +58,7 @@ public sealed class SimConnectClient : IDisposable
     public const uint WM_USER_SIMCONNECT = 0x0402;
 
     private enum DEFINITION { PlaneState, MoveObject, Title }
-    private enum REQUEST : uint { PlaneState = 0, Title = 1, LightBase = 1000, LightRemoveBase = 2000 }
+    private enum REQUEST : uint { PlaneState = 0, Title = 1, LightBase = 1000, LightRemoveBase = 2000, ReleaseBase = 3000 }
     private enum GROUP { Priority }
 
     // Events we transmit to the user aircraft or to spawned objects.
@@ -237,6 +237,17 @@ public sealed class SimConnectClient : IDisposable
                 SIMCONNECT_DATA_SET_FLAG.DEFAULT, pose);
         }
         catch (COMException) { /* object may have just been removed */ }
+    }
+
+    /// <summary>Hand a freshly spawned object from the AI system to us, then
+    /// freeze it. AIReleaseControl is essential — otherwise the AI system keeps
+    /// fighting our SetData writes and the object snaps back to its spawn point.</summary>
+    public void ReleaseAndFreeze(uint objectId, uint lightIndex)
+    {
+        if (_sim == null) return;
+        try { _sim.AIReleaseControl(objectId, (REQUEST)((uint)REQUEST.ReleaseBase + lightIndex)); }
+        catch (COMException ex) { Log?.Invoke($"AIReleaseControl failed: {ex.Message}"); }
+        FreezeLight(objectId);
     }
 
     /// <summary>Freeze physics on a spawned object so our position writes stick.</summary>
