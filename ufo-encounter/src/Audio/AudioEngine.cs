@@ -29,7 +29,25 @@ public sealed class AudioEngine : IDisposable
         OpenOnce(_whoosh, "ufo_whoosh.wav", WavSynth.Whoosh());
         OpenOnce(_jumpscare, "ufo_jumpscare.wav", WavSynth.Jumpscare());
 
+        // Optional override: drop a 'jumpscare.wav' / '.mp3' / '.ogg' next to the
+        // exe to replace the synthesized scare with your own sound.
+        var custom = FindUserAudio("jumpscare");
+        if (custom != null)
+        {
+            try { _jumpscare.Open(new Uri(custom)); } catch { /* keep synth */ }
+        }
+
         foreach (var p in new[] { _drone, _subBass, _static, _whoosh, _jumpscare }) p.Volume = 0;
+    }
+
+    private static string? FindUserAudio(string baseName)
+    {
+        foreach (var ext in new[] { ".wav", ".mp3", ".ogg", ".wma" })
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, baseName + ext);
+            if (File.Exists(path)) return path;
+        }
+        return null;
     }
 
     private void OpenLoop(MediaPlayer p, string name, short[] pcm)

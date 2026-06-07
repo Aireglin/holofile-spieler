@@ -278,9 +278,11 @@ public sealed class SimConnectClient : IDisposable
     private void OnOpen(SimConnect s, SIMCONNECT_RECV_OPEN data)
     {
         Log?.Invoke($"Connected to {data.szApplicationName}.");
+        // Per SIM FRAME: the reference position must be fresh, otherwise spawned
+        // objects placed relative to it lag behind and snap forward each update.
         s.RequestDataOnSimObject(REQUEST.PlaneState, DEFINITION.PlaneState,
-            SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SECOND,
-            SIMCONNECT_DATA_REQUEST_FLAG.CHANGED, 0, 0, 0);
+            SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SIM_FRAME,
+            SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT, 0, 0, 0);
         Connected?.Invoke();
     }
 
