@@ -205,8 +205,16 @@
                                     ValueChanged="BeamHeight_Changed" VerticalAlignment="Center"/>
                             <TextBlock x:Name="BeamHeightVal" Text="30" VerticalAlignment="Center" Margin="6,0"/>
                         </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Label Content="Jet-Titel (F/A-18):" VerticalAlignment="Center" Width="120"/>
+                            <TextBox x:Name="JetTitleBox" Width="240" Margin="4" Background="{StaticResource Panel}"
+                                     Foreground="{StaticResource Text}" TextChanged="JetTitle_Changed"
+                                     ToolTip="Aircraft-Titel des verfolgenden Jets (z. B. die Bord-F/A-18). Leer = Mutterschiff-/Licht-Titel."/>
+                            <Button Content="Aktuelles Flugzeug übernehmen" Click="UseCurrentForJet_Click"/>
+                        </StackPanel>
                         <WrapPanel Margin="0,4,0,0">
                             <Button Content="▶ Holy Grail" Click="TestHolyGrail_Click"/>
+                            <Button Content="▶ Jet-Verfolgung" Click="TestJetChase_Click"/>
                         </WrapPanel>
                     </StackPanel>
                 </GroupBox>

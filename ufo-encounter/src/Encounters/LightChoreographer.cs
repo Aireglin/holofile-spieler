@@ -18,6 +18,12 @@ public enum LightPattern
     /// <summary>Hovers in a tight cluster directly above the aircraft (the
     /// "beam" — its objects' own lights bathe the plane from above).</summary>
     Beam,
+    /// <summary>Slow, long, wide circle around the aircraft.</summary>
+    Orbit,
+    /// <summary>Sits ahead, then accelerates away forward extremely fast.</summary>
+    Streak,
+    /// <summary>Comes from far behind and overtakes very close, passing ahead.</summary>
+    Overtake,
     /// <summary>A single massive object: slow, looming, with occasional
     /// "impossible" instantaneous repositions. Reads well by day.</summary>
     Mothership,
@@ -90,7 +96,7 @@ public sealed class LightChoreographer
         _sim = sim;
         _log = log;
         _rng = rng ?? new Random();
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) }; // ~60 Hz
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) }; // ~100 Hz
         _timer.Tick += OnTick;
         _sim.ObjectAssigned += OnObjectAssigned;
     }
@@ -310,6 +316,38 @@ public sealed class LightChoreographer
                     ringR * Math.Cos(ang) + 3 * wr,
                     ringR * Math.Sin(ang) + 3 * wf,
                     BeamHeight + 2 * Math.Sin(ts * 0.3 + ph),
+                };
+            }
+
+            case LightPattern.Orbit:
+            {
+                // Slow, wide circle around the aircraft (long, hypnotic).
+                double radius = 280 + 220 * v.Dist;
+                double ang = ts * 0.12 + ph + idx * (2 * Math.PI / Math.Max(1, n));
+                return new[]
+                {
+                    radius * Math.Cos(ang) + 20 * wr,
+                    radius * Math.Sin(ang) + 20 * wf,
+                    60 + 40 * Math.Sin(ts * 0.05 + ph) + 15 * wu,
+                };
+            }
+
+            case LightPattern.Streak:
+            {
+                // Sits ahead, then accelerates forward away (uses raw t for punch).
+                double f = 500 + 220 * t * t;
+                return new[] { v.Side * 50 + 12 * wr, f, 40 + 12 * wu };
+            }
+
+            case LightPattern.Overtake:
+            {
+                // Far behind → very close pass → far ahead, over the phase duration.
+                double u = Math.Clamp(t / Math.Max(1.0, _durationSec), 0, 1);
+                return new[]
+                {
+                    v.Side * (45 + 20 * v.Dist),
+                    Lerp(-2200, 3500, u),
+                    8 + 12 * Math.Sin(u * Math.PI),
                 };
             }
 

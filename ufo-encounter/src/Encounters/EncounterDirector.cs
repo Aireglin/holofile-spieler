@@ -75,6 +75,9 @@ public sealed class EncounterDirector
     public int BeamCount { get; set; } = 3;
     public double BeamHeight { get; set; } = 30;
 
+    /// <summary>Aircraft title for the chasing jet (e.g. the stock F/A-18).</summary>
+    public string JetTitle { get; set; } = "";
+
     public bool IsRandomMode => _scheduler.IsEnabled;
     public bool IsEncounterActive { get; private set; }
 
@@ -119,8 +122,41 @@ public sealed class EncounterDirector
         ScheduleNext();
         if (IsEncounterActive) return;
         if (!CanTriggerNow()) { _trace?.Invoke("Skipped (realism-lock)."); return; }
-        await TriggerAsync(PickScenario());
+
+        // Rare scripted special: the jet chase.
+        if (_rng.NextDouble() < 0.08) { await RunJetChaseAsync(); return; }
+
+        var scenario = PickScenario();
+
+        // Full randomization for autonomous encounters: roll the tunables fresh
+        // each time (and restore the user's manual values afterwards), so nothing
+        // becomes predictable. Everything stays combinable.
+        int sCount = LightCount; double sDread = Dread;
+        double sSpeed = _lights.SpeedScale, sMin = _lights.MinDistanceMeters;
+        try
+        {
+            LightCount = _rng.Next(1, 6);                                 // 1..5
+            Dread = _rng.NextDouble();                                    // drives escalation + Holy-Grail odds
+            _lights.SpeedScale = 0.4 + _rng.NextDouble() * 0.5;           // 0.4..0.9
+            _lights.MinDistanceMeters = 120 + _rng.NextDouble() * 700;    // 120..820 m
+            // Non-mothership scenarios get a randomized light pattern so the same
+            // scenario never looks the same twice.
+            if (!scenario.Mothership && _rng.NextDouble() < 0.75)
+                scenario = scenario with { Lights = RandomLightPattern() };
+            await TriggerAsync(scenario);
+        }
+        finally
+        {
+            LightCount = sCount; Dread = sDread;
+            _lights.SpeedScale = sSpeed; _lights.MinDistanceMeters = sMin;
+        }
     }
+
+    private static readonly LightPattern[] RandomPatterns =
+        { LightPattern.TicTac, LightPattern.Wingman, LightPattern.FlyBy,
+          LightPattern.Formation, LightPattern.PopUp, LightPattern.Orbit };
+
+    private LightPattern RandomLightPattern() => RandomPatterns[_rng.Next(RandomPatterns.Length)];
 
     /// <summary>Weighted random scenario pick. With day/night bias on, night
     /// favours light-only scenarios and day favours the solid mothership.</summary>
@@ -383,7 +419,7 @@ public sealed class EncounterDirector
 
             // 3) Power AND engine fail for certain; dramatic dark seconds.
             double darkBefore = 4 + 2 * _rng.NextDouble();
-            double beamDur = 5 + 2 * _rng.NextDouble();
+            double beamDur = 8 + _rng.NextDouble() * 9;   // 8–17 s overhead
             elec = _disruptor.RunAsync(new DisruptionPlan
             {
                 Kind = DisruptionKind.DeepBlackout,
@@ -416,6 +452,59 @@ public sealed class EncounterDirector
             IsEncounterActive = false;
             EncounterStateChanged?.Invoke("Holy Grail", false);
             _trace?.Invoke("■ Holy Grail ended.");
+        }
+    }
+
+    /// <summary>JAL1628-style chase: the UFO sits ahead, then accelerates away
+    /// at impossible speed; moments later a fighter jet (F/A-18) overtakes very
+    /// close, chasing it — too slow to catch up.</summary>
+    public async Task RunJetChaseAsync()
+    {
+        if (IsEncounterActive) return;
+        if (!_sim.IsConnected) { _trace?.Invoke("Jet chase: not connected."); return; }
+        if (_sim.State.OnGround > 0.5) { _trace?.Invoke("Jet chase: skipped (on ground)."); return; }
+        var ct = (_current = new CancellationTokenSource()).Token;
+        IsEncounterActive = true;
+        EncounterStateChanged?.Invoke("Jet-Verfolgung", true);
+        _trace?.Invoke("▶ Jet-Verfolgung (JAL1628-Stil)");
+        _log.Record("Jet chase", _sim.State);
+
+        double savedMin = _lights.MinDistanceMeters;
+        string ufoTitle = !string.IsNullOrWhiteSpace(MothershipTitle) ? MothershipTitle : LightObjectTitle;
+        string jetTitle = !string.IsNullOrWhiteSpace(JetTitle) ? JetTitle : ufoTitle;
+        try
+        {
+            _audio.StartLayers();
+            _audio.SetDroneVolume(Math.Clamp(0.5 * (0.4 + 0.6 * Intensity), 0, 1));
+            _audio.SetSubBassVolume(0.35);
+
+            // 1) UFO paces ahead.
+            _lights.MinDistanceMeters = 0;
+            if (LightsEnabled) _lights.Start(LightPattern.PopUp, 1, 7, ufoTitle, SpawnAsAircraft);
+            await Task.Delay(TimeSpan.FromSeconds(5 + _rng.NextDouble() * 4), ct);
+
+            // 2) UFO accelerates away.
+            _audio.SetSubBassVolume(0.7);
+            _lights.SetPattern(LightPattern.Streak);
+            await Task.Delay(TimeSpan.FromSeconds(3), ct);
+            _lights.Stop();
+            _audio.SetSubBassVolume(0.2);
+
+            // 3) Beat, then the jet overtakes very close.
+            await Task.Delay(TimeSpan.FromSeconds(2 + _rng.NextDouble() * 2), ct);
+            if (LightsEnabled) _lights.Start(LightPattern.Overtake, 1, 5, jetTitle, asAircraft: true);
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            _lights.Stop();
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _lights.MinDistanceMeters = savedMin;
+            _audio.StopAll();
+            _lights.Stop();
+            IsEncounterActive = false;
+            EncounterStateChanged?.Invoke("Jet-Verfolgung", false);
+            _trace?.Invoke("■ Jet-Verfolgung ended.");
         }
     }
 

@@ -70,6 +70,18 @@ public sealed record EncounterScenario(
             Lights: LightPattern.Mothership, Mothership: true),
 
         new EncounterScenario(
+            "Umkreisung",
+            "Ein Licht zieht langsam und lautlos eine weite Kreisbahn um das Flugzeug.",
+            DisruptionKind.None, Hum: true, HumIntensity: 0.5, HumBaseHz: 68,
+            Lights: LightPattern.Orbit),
+
+        new EncounterScenario(
+            "JAL1628 (Riese)",
+            "Ein gewaltiges Objekt begleitet dich über längere Zeit auf Distanz - langsam, schwer, unheimlich.",
+            DisruptionKind.None, Hum: true, HumIntensity: 0.85, HumBaseHz: 46,
+            Lights: LightPattern.Mothership, Mothership: true),
+
+        new EncounterScenario(
             "Mutterschiff (E-Störung)",
             "Das massive Objekt kommt näher und legt die Elektrik lahm: tiefer Total-Blackout, "
             + "während es lautlos über/vor dir steht.",

@@ -33,6 +33,7 @@ public sealed class AppSettings
     public string BeamTitle { get; set; } = "";
     public int BeamCount { get; set; } = 3;
     public double BeamHeight { get; set; } = 30;
+    public string JetTitle { get; set; } = "";
 }
 
 /// <summary>Loads/saves <see cref="AppSettings"/> as JSON next to the executable.</summary>

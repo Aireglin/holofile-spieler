@@ -192,6 +192,7 @@ public partial class MainWindow : Window
         _director.BeamTitle = BeamTitleBox.Text;
         _director.BeamCount = (int)BeamCountSlider.Value;
         _director.BeamHeight = BeamHeightSlider.Value;
+        _director.JetTitle = JetTitleBox.Text;
         if (_lights != null)
         {
             _lights.MinDistanceMeters = MinDistSlider.Value;
@@ -242,6 +243,18 @@ public partial class MainWindow : Window
     private async void TestHolyGrail_Click(object sender, RoutedEventArgs e)
     {
         if (_director != null) await _director.RunHolyGrailAsync();
+    }
+
+    private void UseCurrentForJet_Click(object sender, RoutedEventArgs e) => RequestTitleInto(JetTitleBox);
+
+    private void JetTitle_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_director != null) _director.JetTitle = JetTitleBox.Text;
+    }
+
+    private async void TestJetChase_Click(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) await _director.RunJetChaseAsync();
     }
 
     private void BlackSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -423,6 +436,7 @@ public partial class MainWindow : Window
         BeamTitleBox.Text = s.BeamTitle;
         BeamCountSlider.Value = s.BeamCount;
         BeamHeightSlider.Value = s.BeamHeight;
+        JetTitleBox.Text = s.JetTitle;
     }
 
     private void SaveSettings() => SettingsStore.Save(new AppSettings
@@ -452,6 +466,7 @@ public partial class MainWindow : Window
         BeamTitle = BeamTitleBox.Text,
         BeamCount = (int)BeamCountSlider.Value,
         BeamHeight = BeamHeightSlider.Value,
+        JetTitle = JetTitleBox.Text,
     });
 
     protected override void OnClosed(EventArgs e)
