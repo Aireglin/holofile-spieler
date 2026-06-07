@@ -341,12 +341,17 @@ public sealed class LightChoreographer
 
             case LightPattern.Overtake:
             {
-                // Far behind → very close pass → far ahead, over the phase duration.
+                // Realistic-ish fast pass: a fixed RELATIVE closing speed on top of
+                // the player. ~150 m/s over the player ≈ a transonic fighter when
+                // you're at cruise — not the old Mach-3 blink.
+                const double rel = 150; // m/s relative (~290 kt over the player)
+                double half = rel * _durationSec / 2.0;
+                double f = -half + rel * t; // far behind → close pass → far ahead
                 double u = Math.Clamp(t / Math.Max(1.0, _durationSec), 0, 1);
                 return new[]
                 {
                     v.Side * (45 + 20 * v.Dist),
-                    Lerp(-2200, 3500, u),
+                    f,
                     8 + 12 * Math.Sin(u * Math.PI),
                 };
             }

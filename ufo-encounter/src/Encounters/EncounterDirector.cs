@@ -61,6 +61,9 @@ public sealed class EncounterDirector
     public double DisruptionChance { get; set; } = 0.75;
     /// <summary>Total blackout also shuts the engine down (and auto-restarts it).</summary>
     public bool DeepBlackoutCutsEngine { get; set; } = true;
+    /// <summary>Use engine auto-shutdown only for the blackout (for jets/turbines,
+    /// where per-channel toggles don't fully work). Off = GA-friendly (C172).</summary>
+    public bool FullShutdownForBlackout { get; set; } = false;
 
     public string LightObjectTitle { get; set; } = "";
     public string MothershipTitle { get; set; } = "";
@@ -326,6 +329,7 @@ public sealed class EncounterDirector
                 StartDelay = TimeSpan.FromSeconds(_rng.NextDouble() * 3),
                 Duration = TimeSpan.FromSeconds(dur),
                 CutEngine = DeepBlackoutCutsEngine,
+                UseFullShutdown = FullShutdownForBlackout,
             };
         }
 
@@ -340,6 +344,7 @@ public sealed class EncounterDirector
                 BlackoutDuration = TimeSpan.FromSeconds(lo + _rng.NextDouble() * (hi - lo)),
                 EscalateChance = 0.6,
                 CutEngine = DeepBlackoutCutsEngine,
+                UseFullShutdown = FullShutdownForBlackout,
                 StutterStep = TimeSpan.FromMilliseconds(450 - 250 * Intensity),
             };
         }
@@ -425,6 +430,7 @@ public sealed class EncounterDirector
                 Kind = DisruptionKind.DeepBlackout,
                 Duration = TimeSpan.FromSeconds(darkBefore + beamDur + 1.0), // restore just after the beam
                 CutEngine = true,
+                UseFullShutdown = FullShutdownForBlackout,
             }, ct);
             await Task.Delay(TimeSpan.FromSeconds(darkBefore), ct);
 
@@ -492,8 +498,8 @@ public sealed class EncounterDirector
 
             // 3) Beat, then the jet overtakes very close.
             await Task.Delay(TimeSpan.FromSeconds(2 + _rng.NextDouble() * 2), ct);
-            if (LightsEnabled) _lights.Start(LightPattern.Overtake, 1, 5, jetTitle, asAircraft: true);
-            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            if (LightsEnabled) _lights.Start(LightPattern.Overtake, 1, 10, jetTitle, asAircraft: true);
+            await Task.Delay(TimeSpan.FromSeconds(10), ct);
             _lights.Stop();
         }
         catch (OperationCanceledException) { }

@@ -39,6 +39,10 @@ public sealed record DisruptionPlan
     public TimeSpan BlackoutDuration { get; init; } = TimeSpan.FromSeconds(10);
     /// <summary>For StutterToBlackout: probability (0..1) the flicker escalates.</summary>
     public double EscalateChance { get; init; } = 0.5;
+    /// <summary>Use ONLY engine auto-shutdown/start for the blackout (kills turbines
+    /// + their generators on jets where the per-channel toggles don't fully work).
+    /// Leave off for GA pistons (e.g. the C172) where the toggles work well.</summary>
+    public bool UseFullShutdown { get; init; }
 }
 
 /// <summary>
@@ -95,12 +99,16 @@ public sealed class ElectricalDisruptor
 
                 case DisruptionKind.DeepBlackout:
                     _log?.Invoke($"DEEP blackout: all power off for {plan.Duration.TotalSeconds:0.#}s "
-                                 + $"(delay {plan.StartDelay.TotalSeconds:0.#}s){(plan.CutEngine ? " + engine" : "")}.");
-                    SetAllPower(false);
-                    if (plan.CutEngine)
+                                 + $"(delay {plan.StartDelay.TotalSeconds:0.#}s){(plan.CutEngine || plan.UseFullShutdown ? " + engine" : "")}.");
+                    if (plan.UseFullShutdown)
                     {
                         _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN);
                         _engineCut = true;
+                    }
+                    else
+                    {
+                        SetAllPower(false);
+                        if (plan.CutEngine) { _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN); _engineCut = true; }
                     }
                     await Task.Delay(plan.Duration, ct);
                     break;
@@ -116,9 +124,17 @@ public sealed class ElectricalDisruptor
                     if (_rng.NextDouble() < plan.EscalateChance)
                     {
                         _log?.Invoke($"...flicker collapsed into DEEP blackout "
-                                     + $"for {plan.BlackoutDuration.TotalSeconds:0.#}s{(plan.CutEngine ? " + engine" : "")}.");
-                        SetAllPower(false);
-                        if (plan.CutEngine) { _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN); _engineCut = true; }
+                                     + $"for {plan.BlackoutDuration.TotalSeconds:0.#}s{(plan.CutEngine || plan.UseFullShutdown ? " + engine" : "")}.");
+                        if (plan.UseFullShutdown)
+                        {
+                            _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN);
+                            _engineCut = true;
+                        }
+                        else
+                        {
+                            SetAllPower(false);
+                            if (plan.CutEngine) { _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN); _engineCut = true; }
+                        }
                         await Task.Delay(plan.BlackoutDuration, ct);
                     }
                     else

@@ -117,6 +117,7 @@ public partial class MainWindow : Window
             Kind = DisruptionKind.DeepBlackout,
             Duration = TimeSpan.FromSeconds(8),
             CutEngine = _director?.DeepBlackoutCutsEngine ?? true,
+            UseFullShutdown = _director?.FullShutdownForBlackout ?? false,
         });
 
     private async void TestStutter_Click(object sender, RoutedEventArgs e) =>
@@ -143,6 +144,7 @@ public partial class MainWindow : Window
             BlackoutDuration = TimeSpan.FromSeconds(8),  // blackout phase
             EscalateChance = 1.0,                        // force the transition for the test
             CutEngine = _director?.DeepBlackoutCutsEngine ?? true,
+            UseFullShutdown = _director?.FullShutdownForBlackout ?? false,
             StutterStep = TimeSpan.FromMilliseconds(450 - 250 * IntensitySlider.Value),
         });
 
@@ -184,6 +186,7 @@ public partial class MainWindow : Window
         _director.WhooshVolume = WhooshVolSlider.Value;
         _director.DisruptionChance = DisruptChanceSlider.Value;
         _director.DeepBlackoutCutsEngine = EngineCutChk.IsChecked == true;
+        _director.FullShutdownForBlackout = FullShutdownChk.IsChecked == true;
         _director.LightsEnabled = LightsChk.IsChecked == true;
         _director.LightObjectTitle = LightTitleBox.Text;
         _director.MothershipTitle = MothershipTitleBox.Text;
@@ -337,6 +340,11 @@ public partial class MainWindow : Window
         if (_director != null) _director.DeepBlackoutCutsEngine = EngineCutChk.IsChecked == true;
     }
 
+    private void FullShutdown_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) _director.FullShutdownForBlackout = FullShutdownChk.IsChecked == true;
+    }
+
     private void DisruptChance_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (DisruptChanceVal != null) DisruptChanceVal.Text = DisruptChanceSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
@@ -425,6 +433,7 @@ public partial class MainWindow : Window
         DayNightChk.IsChecked = s.DayNight;
         WhooshChk.IsChecked = s.Whoosh;
         EngineCutChk.IsChecked = s.EngineCut;
+        FullShutdownChk.IsChecked = s.FullShutdown;
         RealismChk.IsChecked = s.Realism;
         LightsChk.IsChecked = s.LightsEnabled;
         AircraftChk.IsChecked = s.SpawnAsAircraft;
@@ -456,6 +465,7 @@ public partial class MainWindow : Window
         DayNight = DayNightChk.IsChecked == true,
         Whoosh = WhooshChk.IsChecked == true,
         EngineCut = EngineCutChk.IsChecked == true,
+        FullShutdown = FullShutdownChk.IsChecked == true,
         Realism = RealismChk.IsChecked == true,
         LightsEnabled = LightsChk.IsChecked == true,
         SpawnAsAircraft = AircraftChk.IsChecked == true,

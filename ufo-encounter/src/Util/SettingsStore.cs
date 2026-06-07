@@ -21,6 +21,7 @@ public sealed class AppSettings
     public bool DayNight { get; set; } = true;
     public bool Whoosh { get; set; } = false;
     public bool EngineCut { get; set; } = true;
+    public bool FullShutdown { get; set; }
     public bool Realism { get; set; } = true;
     public bool LightsEnabled { get; set; } = true;
     public bool SpawnAsAircraft { get; set; }

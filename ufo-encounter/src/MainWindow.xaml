@@ -59,6 +59,8 @@
                                   IsChecked="False" Checked="Whoosh_Changed" Unchecked="Whoosh_Changed"/>
                         <CheckBox x:Name="EngineCutChk" Content="Motor im Total-Blackout abschalten (Auto-Restart beim Wiedereinschalten)"
                                   IsChecked="True" Checked="EngineCut_Changed" Unchecked="EngineCut_Changed"/>
+                        <CheckBox x:Name="FullShutdownChk" Content="Blackout: Komplett-Abschaltung (Jets/Turbinen) statt Elektrik-Toggles — für C172 AUS lassen"
+                                  IsChecked="False" Checked="FullShutdown_Changed" Unchecked="FullShutdown_Changed"/>
 
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
