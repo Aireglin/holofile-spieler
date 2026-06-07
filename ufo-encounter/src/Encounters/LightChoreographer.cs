@@ -105,6 +105,10 @@ public sealed class LightChoreographer
         _start = DateTime.UtcNow;
         IsActive = true;
 
+        // Comma-separated titles → each object randomly picks one (e.g. mixed colours).
+        var titles = _title.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (titles.Length == 0) { _log?.Invoke("Lights: no SimObject title set."); IsActive = false; return; }
+
         // A mothership is a single large object; light patterns can have several.
         count = pattern == LightPattern.Mothership ? 1 : Math.Clamp(count, 1, 8);
         for (uint i = 0; i < count; i++)
@@ -112,9 +116,10 @@ public sealed class LightChoreographer
             var light = new Light { Index = i, V = RollVars() };
             Seed(light);
             _lights.Add(light);
-            _sim.SpawnLight(_title, ComposePose(p, light.Current, 0, light.V), i, _asAircraft);
+            var chosen = titles[_rng.Next(titles.Length)];
+            _sim.SpawnLight(chosen, ComposePose(p, light.Current, 0, light.V), i, _asAircraft);
         }
-        _log?.Invoke($"Lights: spawning {count}× '{_title}' ({pattern}).");
+        _log?.Invoke($"Lights: spawning {count} object(s) ({pattern}).");
         _timer.Start();
     }
 
