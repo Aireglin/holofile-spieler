@@ -29,6 +29,7 @@ public sealed class AppSettings
     public string MothershipTitle { get; set; } = "";
     public int LightCount { get; set; } = 2;
     public double MinDistance { get; set; }
+    public double SpeedScale { get; set; } = 0.6;
 }
 
 /// <summary>Loads/saves <see cref="AppSettings"/> as JSON next to the executable.</summary>

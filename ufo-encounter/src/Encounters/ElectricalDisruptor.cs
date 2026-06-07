@@ -15,6 +15,8 @@ public enum DisruptionKind
     /// <summary>Everything off (battery + both alternators + avionics); timing is
     /// decoupled from the encounter (own start delay and duration).</summary>
     DeepBlackout,
+    /// <summary>Flicker first, then (maybe) collapse into a full deep blackout.</summary>
+    StutterToBlackout,
 }
 
 public sealed record DisruptionPlan
@@ -33,6 +35,10 @@ public sealed record DisruptionPlan
     public bool CutAvionics { get; init; } = true;
     /// <summary>For DeepBlackout: also shut the engine(s) down and auto-restart on restore.</summary>
     public bool CutEngine { get; init; } = false;
+    /// <summary>For StutterToBlackout: how long the blackout part lasts.</summary>
+    public TimeSpan BlackoutDuration { get; init; } = TimeSpan.FromSeconds(10);
+    /// <summary>For StutterToBlackout: probability (0..1) the flicker escalates.</summary>
+    public double EscalateChance { get; init; } = 0.5;
 }
 
 /// <summary>
@@ -101,18 +107,23 @@ public sealed class ElectricalDisruptor
 
                 case DisruptionKind.Stutter:
                     _log?.Invoke($"Stutter for {plan.Duration.TotalSeconds:0.#}s.");
-                    var until = DateTime.UtcNow + plan.Duration;
-                    var on = true;
-                    double baseMs = plan.StutterStep.TotalMilliseconds;
-                    while (DateTime.UtcNow < until)
+                    await StutterAsync(plan, plan.Duration, ct);
+                    break;
+
+                case DisruptionKind.StutterToBlackout:
+                    _log?.Invoke($"Stutter for {plan.Duration.TotalSeconds:0.#}s, then maybe blackout.");
+                    await StutterAsync(plan, plan.Duration, ct);
+                    if (_rng.NextDouble() < plan.EscalateChance)
                     {
-                        on = !on;
-                        SetPower(on, plan);
-                        // Irregular dwell: random around the nominal step; off-phases
-                        // skew a little longer for a "dying" feel.
-                        double ms = baseMs * (0.3 + _rng.NextDouble() * 1.6);
-                        if (!on) ms *= 1.0 + _rng.NextDouble() * 0.6;
-                        await Task.Delay(TimeSpan.FromMilliseconds(ms), ct);
+                        _log?.Invoke($"...flicker collapsed into DEEP blackout "
+                                     + $"for {plan.BlackoutDuration.TotalSeconds:0.#}s{(plan.CutEngine ? " + engine" : "")}.");
+                        SetAllPower(false);
+                        if (plan.CutEngine) { _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN); _engineCut = true; }
+                        await Task.Delay(plan.BlackoutDuration, ct);
+                    }
+                    else
+                    {
+                        _log?.Invoke("...flicker faded, power held.");
                     }
                     break;
             }
@@ -126,6 +137,22 @@ public sealed class ElectricalDisruptor
             // Failsafe: power always comes back on, even on cancel/exception.
             RestorePower();
             IsActive = false;
+        }
+    }
+
+    /// <summary>Irregular on/off flicker for the given span (off-phases skew longer).</summary>
+    private async Task StutterAsync(DisruptionPlan plan, TimeSpan span, CancellationToken ct)
+    {
+        var until = DateTime.UtcNow + span;
+        var on = true;
+        double baseMs = plan.StutterStep.TotalMilliseconds;
+        while (DateTime.UtcNow < until)
+        {
+            on = !on;
+            SetPower(on, plan);
+            double ms = baseMs * (0.3 + _rng.NextDouble() * 1.6);
+            if (!on) ms *= 1.0 + _rng.NextDouble() * 0.6;
+            await Task.Delay(TimeSpan.FromMilliseconds(ms), ct);
         }
     }
 

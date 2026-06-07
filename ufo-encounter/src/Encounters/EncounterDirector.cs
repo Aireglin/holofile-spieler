@@ -237,7 +237,11 @@ public sealed class EncounterDirector
         double d = Dread;
         var approach = s.Mothership || signature ? LightPattern.Mothership : LightPattern.PopUp;
         var observe = s.Mothership || signature ? LightPattern.Mothership : LightPattern.Wingman;
+        // Mothership encounters keep the slow object even on departure (it just
+        // vanishes); others dart away.
+        bool ship = s.Mothership || signature;
         var climax = signature ? LightPattern.Mothership : (s.Lights ?? LightPattern.TicTac);
+        var leave = ship ? LightPattern.Mothership : LightPattern.TicTac;
 
         var escalationDisruption = !allowElec
             ? DisruptionKind.None
@@ -245,6 +249,10 @@ public sealed class EncounterDirector
                 ? DisruptionKind.DeepBlackout
                 : (s.Disruption != DisruptionKind.None ? s.Disruption
                    : (d > 0.6 ? DisruptionKind.Stutter : DisruptionKind.None));
+
+        // A flicker may collapse into a blackout (the requested transition).
+        if (escalationDisruption == DisruptionKind.Stutter && _rng.NextDouble() < 0.5)
+            escalationDisruption = DisruptionKind.StutterToBlackout;
 
         double escDur = signature ? 16 + 12 * d : 4 + 8 * d;
 
@@ -256,7 +264,7 @@ public sealed class EncounterDirector
                 Proximity: 0.5, Whoosh: false, SubBass: true, Silence: false),
             new("Eskalation", escDur, climax, escalationDisruption,
                 Proximity: Math.Min(1.0, 0.85 + 0.15 * d + (signature ? 0.15 : 0)), Whoosh: true, SubBass: true, Silence: false),
-            new("Abgang", 2.5, LightPattern.TicTac, DisruptionKind.None,
+            new("Abgang", 2.5, leave, DisruptionKind.None,
                 Proximity: 0.0, Whoosh: false, SubBass: false, Silence: true),
         };
     }
@@ -275,6 +283,21 @@ public sealed class EncounterDirector
                 StartDelay = TimeSpan.FromSeconds(_rng.NextDouble() * 3),
                 Duration = TimeSpan.FromSeconds(dur),
                 CutEngine = DeepBlackoutCutsEngine,
+            };
+        }
+
+        if (kind == DisruptionKind.StutterToBlackout)
+        {
+            double lo = Math.Min(BlackoutMinSec, BlackoutMaxSec);
+            double hi = Math.Max(BlackoutMinSec, BlackoutMaxSec);
+            return new DisruptionPlan
+            {
+                Kind = DisruptionKind.StutterToBlackout,
+                Duration = TimeSpan.FromSeconds(Math.Min(phaseDur, 4)), // flicker phase
+                BlackoutDuration = TimeSpan.FromSeconds(lo + _rng.NextDouble() * (hi - lo)),
+                EscalateChance = 0.6,
+                CutEngine = DeepBlackoutCutsEngine,
+                StutterStep = TimeSpan.FromMilliseconds(450 - 250 * Intensity),
             };
         }
 

@@ -135,6 +135,17 @@ public partial class MainWindow : Window
         catch (OperationCanceledException) { }
     }
 
+    private async void TestStutterToBlackout_Click(object sender, RoutedEventArgs e) =>
+        await RunEffect(new DisruptionPlan
+        {
+            Kind = DisruptionKind.StutterToBlackout,
+            Duration = TimeSpan.FromSeconds(4),          // stutter phase
+            BlackoutDuration = TimeSpan.FromSeconds(8),  // blackout phase
+            EscalateChance = 1.0,                        // force the transition for the test
+            CutEngine = _director?.DeepBlackoutCutsEngine ?? true,
+            StutterStep = TimeSpan.FromMilliseconds(450 - 250 * IntensitySlider.Value),
+        });
+
     private async void TestHum_Click(object sender, RoutedEventArgs e)
     {
         if (_audio == null) return;
@@ -178,7 +189,11 @@ public partial class MainWindow : Window
         _director.MothershipTitle = MothershipTitleBox.Text;
         _director.LightCount = (int)LightCountSlider.Value;
         _director.SpawnAsAircraft = AircraftChk.IsChecked == true;
-        if (_lights != null) _lights.MinDistanceMeters = MinDistSlider.Value;
+        if (_lights != null)
+        {
+            _lights.MinDistanceMeters = MinDistSlider.Value;
+            _lights.SpeedScale = SpeedSlider.Value;
+        }
     }
 
     // Which field a pending "use current aircraft" request should fill.
@@ -225,6 +240,12 @@ public partial class MainWindow : Window
     {
         if (MinDistVal != null) MinDistVal.Text = MinDistSlider.Value.ToString("0", CultureInfo.InvariantCulture);
         if (_lights != null) _lights.MinDistanceMeters = MinDistSlider.Value;
+    }
+
+    private void Speed_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (SpeedVal != null) SpeedVal.Text = SpeedSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
+        if (_lights != null) _lights.SpeedScale = SpeedSlider.Value;
     }
 
     private void LightTitle_Changed(object sender, TextChangedEventArgs e)
@@ -371,6 +392,7 @@ public partial class MainWindow : Window
         LightTitleBox.Text = s.LightTitle;
         MothershipTitleBox.Text = s.MothershipTitle;
         MinDistSlider.Value = s.MinDistance;
+        SpeedSlider.Value = s.SpeedScale;
     }
 
     private void SaveSettings() => SettingsStore.Save(new AppSettings
@@ -396,6 +418,7 @@ public partial class MainWindow : Window
         LightTitle = LightTitleBox.Text,
         MothershipTitle = MothershipTitleBox.Text,
         MinDistance = MinDistSlider.Value,
+        SpeedScale = SpeedSlider.Value,
     });
 
     protected override void OnClosed(EventArgs e)

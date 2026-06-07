@@ -36,6 +36,7 @@
                     <WrapPanel>
                         <Button Content="Total-Blackout 8s" Click="TestBlackout_Click"/>
                         <Button Content="Stutter 6s" Click="TestStutter_Click"/>
+                        <Button Content="Stutter→Blackout" Click="TestStutterToBlackout_Click"/>
                         <Button Content="Hum 6s" Click="TestHum_Click"/>
                         <Button Content="▶ Mehrphasige Begegnung" Click="TestFullEncounter_Click"/>
                         <Button Content="⛔ PANIK-STOP" Click="Panic_Click"
@@ -166,6 +167,13 @@
                                     ValueChanged="MinDist_Changed" VerticalAlignment="Center"
                                     ToolTip="0 = kein Limit. Hält Objekte weiter weg, um Nahbereich-Ruckeln zu vermeiden."/>
                             <TextBlock x:Name="MinDistVal" Text="0" VerticalAlignment="Center" Margin="6,0"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Label Content="Bewegungstempo:" VerticalAlignment="Center"/>
+                            <Slider x:Name="SpeedSlider" Minimum="0.2" Maximum="1.5" Value="0.6" Width="200"
+                                    ValueChanged="Speed_Changed" VerticalAlignment="Center"
+                                    ToolTip="Niedriger = langsamere Objekte, der Sim kommt besser hinterher (weniger Ruckeln)."/>
+                            <TextBlock x:Name="SpeedVal" Text="0.60" VerticalAlignment="Center" Margin="6,0"/>
                         </StackPanel>
                         <WrapPanel Margin="0,4,0,0">
                             <Button Content="Test: Tic-Tac" Click="TestLightTicTac_Click"/>

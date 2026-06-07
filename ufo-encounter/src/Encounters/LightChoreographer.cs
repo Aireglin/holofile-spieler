@@ -76,6 +76,9 @@ public sealed class LightChoreographer
     public double? NearestMeters { get; private set; }
     /// <summary>Never let an object come closer than this (metres); 0 = no limit.</summary>
     public double MinDistanceMeters { get; set; }
+    /// <summary>Global movement-speed multiplier (lower = slower, so the sim keeps
+    /// up and motion stutters less). ~0.6 is a good default.</summary>
+    public double SpeedScale { get; set; } = 0.6;
 
     public LightChoreographer(SimConnectClient sim, Action<string>? log = null, Random? rng = null)
     {
@@ -116,7 +119,8 @@ public sealed class LightChoreographer
     }
 
     /// <summary>Switch the motion pattern live, keeping the spawned objects
-    /// (used for multi-phase encounters). Re-rolls variance and re-seeds anchors.</summary>
+    /// (used for multi-phase encounters). Re-rolls variance; only Tic-Tac re-seeds
+    /// a jump target — the mothership keeps its far anchor so it never teleports.</summary>
     public void SetPattern(LightPattern pattern)
     {
         if (!IsActive) return;
@@ -125,7 +129,7 @@ public sealed class LightChoreographer
         foreach (var l in _lights)
         {
             l.V = RollVars();
-            Seed(l);
+            if (pattern == LightPattern.TicTac) JumpTicTac(l, 0);
         }
     }
 
@@ -225,7 +229,7 @@ public sealed class LightChoreographer
         double ph = v.Phase;
         int idx = (int)l.Index;
         int n = _lights.Count;
-        double ts = t * v.Speed;
+        double ts = t * v.Speed * Math.Clamp(SpeedScale, 0.1, 2.0);
 
         // Organic wander per axis (different seeds), scaled by amplitude.
         double wr = Wander(ts, ph) * v.Amp;
@@ -274,13 +278,14 @@ public sealed class LightChoreographer
                 };
 
             case LightPattern.Mothership:
-                if (t >= l.NextJump) JumpMothership(l, t);
-                // Slow looming sway around the (occasionally repositioned) anchor.
+                // No pop-ups: a single massive object drifting slowly around a
+                // fixed far anchor (seeded once). Very low frequencies + wander
+                // read as huge mass moving "impossibly" but believably.
                 return new[]
                 {
-                    l.Current[0] + 180 * v.Amp * Math.Sin(ts * 0.15 + ph) + 120 * wr,
-                    l.Current[1] + 300 * Math.Sin(ts * 0.10) + 160 * wf,
-                    l.Current[2] + 70 * Math.Sin(ts * 0.12 + ph) + 80 * wu,
+                    l.Current[0] + 350 * Math.Sin(ts * 0.05 + ph) + 130 * wr,
+                    l.Current[1] + 420 * Math.Sin(ts * 0.035) + 170 * wf,
+                    l.Current[2] + 130 * Math.Sin(ts * 0.045 + ph) + 90 * wu,
                 };
 
             case LightPattern.TicTac:
@@ -298,17 +303,18 @@ public sealed class LightChoreographer
         l.Current[0] = (_rng.NextDouble() * 2 - 1) * reach;                  // right
         l.Current[1] = 200 + _rng.NextDouble() * (reach + 600);             // fwd
         l.Current[2] = (_rng.NextDouble() * 2 - 1) * 250 + 100;             // up
-        double dwell = v.JumpMin + _rng.NextDouble() * (v.JumpMax - v.JumpMin);
+        double dwell = (v.JumpMin + _rng.NextDouble() * (v.JumpMax - v.JumpMin))
+                       / Math.Clamp(SpeedScale, 0.1, 2.0);                   // slower speed = longer dwell
         l.NextJump = t + (dart ? dwell * 0.4 : dwell);                       // darts snap quicker
     }
 
     private void JumpMothership(Light l, double t)
     {
+        // Seeds the fixed far anchor once (no further repositioning).
         var v = l.V;
         l.Current[0] = (_rng.NextDouble() * 2 - 1) * 1500 * v.Dist;          // right ±
         l.Current[1] = 2200 + _rng.NextDouble() * 3500 * v.Dist;            // far ahead
-        l.Current[2] = -200 + _rng.NextDouble() * 1000;                     // can loom above
-        l.NextJump = t + 6 + _rng.NextDouble() * 8;                         // reposition every 6–14s
+        l.Current[2] = -100 + _rng.NextDouble() * 900;                      // can loom above
     }
 
     /// <summary>Convert a local (right, fwd, up) offset to a world pose.</summary>
