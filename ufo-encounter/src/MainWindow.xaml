@@ -181,6 +181,10 @@
                             <Button Content="Test: Tic-Tac" Click="TestLightTicTac_Click"/>
                             <Button Content="Test: Wingman" Click="TestLightWingman_Click"/>
                             <Button Content="Test: Pop-up" Click="TestLightPopup_Click"/>
+                            <Button Content="Test: Vorn" Click="TestLightPaceAhead_Click"/>
+                            <Button Content="Test: Seitlich" Click="TestLightAbeam_Click"/>
+                            <Button Content="Test: Inspektion" Click="TestLightInspect_Click"/>
+                            <Button Content="Test: Anflug+Bremsen" Click="TestLightBrake_Click"/>
                             <Button Content="Test: Mutterschiff" Click="TestMothership_Click"/>
                         </WrapPanel>
                     </StackPanel>

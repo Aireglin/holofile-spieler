@@ -155,11 +155,6 @@ public sealed class EncounterDirector
         }
     }
 
-    private static readonly LightPattern[] RandomPatterns =
-        { LightPattern.TicTac, LightPattern.Wingman, LightPattern.FlyBy,
-          LightPattern.Formation, LightPattern.PopUp, LightPattern.Orbit };
-
-    private LightPattern RandomLightPattern() => RandomPatterns[_rng.Next(RandomPatterns.Length)];
 
     /// <summary>Weighted random scenario pick. With day/night bias on, night
     /// favours light-only scenarios and day favours the solid mothership.</summary>
@@ -215,7 +210,7 @@ public sealed class EncounterDirector
         // Per-run roll: does the electrical effect fire at all this time?
         bool allowElec = signature || _rng.NextDouble() < DisruptionChance;
         var phases = (MultiPhase || signature)
-            ? BuildMultiPhase(scenario, signature, allowElec)
+            ? BuildChain(scenario, signature, allowElec)
             : BuildSinglePhase(scenario, visual, allowElec);
 
         var ct = (_current = new CancellationTokenSource()).Token;
@@ -255,6 +250,17 @@ public sealed class EncounterDirector
                 catch (OperationCanceledException) { break; }
             }
 
+            // Fly-away finish: objects shoot off (mothership glides majestically)
+            // into the distance before being despawned — they don't just vanish.
+            if (lightsStarted)
+            {
+                _proxTarget = 0; _subBassOn = false;
+                _lights.BeginDepart(mothership);
+                _trace?.Invoke("  · Wegflug");
+                try { await Task.Delay(TimeSpan.FromSeconds(mothership ? 5 : 3.5), ct); }
+                catch (OperationCanceledException) { }
+            }
+
             _audio.HardSilence();
             _lights.Stop();
             try { await elec; } catch (OperationCanceledException) { }
@@ -278,42 +284,85 @@ public sealed class EncounterDirector
             Proximity: s.Mothership ? 0.5 : 0.6, Whoosh: true, SubBass: s.Mothership, Silence: false),
     };
 
-    private List<Phase> BuildMultiPhase(EncounterScenario s, bool signature, bool allowElec)
+    private static readonly LightPattern[] ChainPatterns =
+    {
+        LightPattern.PaceAhead, LightPattern.Abeam, LightPattern.Above, LightPattern.Below,
+        LightPattern.Wingman, LightPattern.Formation, LightPattern.PopUp, LightPattern.Orbit,
+        LightPattern.Inspect, LightPattern.TicTac,
+    };
+
+    private LightPattern RandomLightPattern() => ChainPatterns[_rng.Next(ChainPatterns.Length)];
+
+    /// <summary>Builds a randomized chain of patterns (with sprinkled failures), so
+    /// a single encounter flows from one behaviour into another and is never the
+    /// same twice. Everything stays combinable; the fly-away finish is added by
+    /// the caller. Mothership/signature stay slow and majestic.</summary>
+    private List<Phase> BuildChain(EncounterScenario s, bool signature, bool allowElec)
     {
         double d = Dread;
-        var approach = s.Mothership || signature ? LightPattern.Mothership : LightPattern.PopUp;
-        var observe = s.Mothership || signature ? LightPattern.Mothership : LightPattern.Wingman;
-        // Mothership encounters keep the slow object even on departure (it just
-        // vanishes); others dart away.
+        var phases = new List<Phase>();
         bool ship = s.Mothership || signature;
-        var climax = signature ? LightPattern.Mothership : (s.Lights ?? LightPattern.TicTac);
-        var leave = ship ? LightPattern.Mothership : LightPattern.TicTac;
 
-        var escalationDisruption = !allowElec
-            ? DisruptionKind.None
-            : signature
-                ? DisruptionKind.DeepBlackout
-                : (s.Disruption != DisruptionKind.None ? s.Disruption
-                   : (d > 0.6 ? DisruptionKind.Stutter : DisruptionKind.None));
-
-        // A flicker may collapse into a blackout (the requested transition).
-        if (escalationDisruption == DisruptionKind.Stutter && _rng.NextDouble() < 0.5)
-            escalationDisruption = DisruptionKind.StutterToBlackout;
-
-        double escDur = signature ? 16 + 12 * d : 4 + 8 * d;
-
-        return new List<Phase>
+        if (ship)
         {
-            new("Annäherung", 3.5 + 2 * (1 - d), approach, DisruptionKind.None,
-                Proximity: 0.25, Whoosh: true, SubBass: false, Silence: false),
-            new("Beobachtung", 4 + 3 * (1 - d), observe, DisruptionKind.None,
-                Proximity: 0.5, Whoosh: false, SubBass: true, Silence: false),
-            new("Eskalation", escDur, climax, escalationDisruption,
-                Proximity: Math.Min(1.0, 0.85 + 0.15 * d + (signature ? 0.15 : 0)), Whoosh: true, SubBass: true, Silence: false),
-            new("Abgang", 2.5, leave, DisruptionKind.None,
-                Proximity: 0.0, Whoosh: false, SubBass: false, Silence: true),
-        };
+            phases.Add(new("Annäherung", 5 + 3 * (1 - d), LightPattern.Mothership, DisruptionKind.None,
+                Proximity: 0.3, Whoosh: true, SubBass: false, Silence: false));
+            var disr = allowElec && (signature || _rng.NextDouble() < 0.5 + 0.4 * d)
+                ? DisruptionKind.DeepBlackout : DisruptionKind.None;
+            phases.Add(new("Präsenz", signature ? 16 + 12 * d : 10 + 10 * d, LightPattern.Mothership, disr,
+                Proximity: Math.Min(1.0, 0.6 + 0.3 * d), Whoosh: false, SubBass: true, Silence: false));
+            return phases;
+        }
+
+        // Optional arrival.
+        double r = _rng.NextDouble();
+        if (r < 0.35)
+            phases.Add(new("Anflug (Bremsung)", 5, LightPattern.BrakeHover, DisruptionKind.None,
+                Proximity: 0.85, Whoosh: true, SubBass: false, Silence: false));
+        else if (r < 0.65)
+            phases.Add(new("Annäherung", 9 + 4 * _rng.NextDouble(), LightPattern.Approach, DisruptionKind.None,
+                Proximity: 0.4, Whoosh: false, SubBass: false, Silence: false));
+
+        // 2–4 chained behaviours, each maybe with its own failure.
+        int segs = _rng.Next(2, 5);
+        for (int i = 0; i < segs; i++)
+        {
+            var pat = RandomLightPattern();
+            var disr = (allowElec && _rng.NextDouble() < 0.35 + 0.4 * d)
+                ? RandomDisruption() : DisruptionKind.None;
+            bool sub = disr != DisruptionKind.None || _rng.NextDouble() < 0.5;
+            phases.Add(new($"Muster: {pat}", SegDuration(pat), pat, disr,
+                Proximity: ProximityFor(pat), Whoosh: false, SubBass: sub, Silence: false));
+        }
+        return phases;
     }
+
+    private double SegDuration(LightPattern p) => p switch
+    {
+        LightPattern.Inspect or LightPattern.Orbit => 18 + _rng.NextDouble() * 22,   // long sightings
+        LightPattern.PaceAhead or LightPattern.Abeam or LightPattern.Above
+            or LightPattern.Below or LightPattern.Wingman or LightPattern.Formation => 8 + _rng.NextDouble() * 12,
+        LightPattern.TicTac => 4 + _rng.NextDouble() * 5,
+        _ => 6 + _rng.NextDouble() * 6,
+    };
+
+    private DisruptionKind RandomDisruption()
+    {
+        double r = _rng.NextDouble();
+        if (r < 0.5) return DisruptionKind.Stutter;
+        if (r < 0.8) return DisruptionKind.StutterToBlackout;
+        return DisruptionKind.DeepBlackout;
+    }
+
+    private static double ProximityFor(LightPattern p) => p switch
+    {
+        LightPattern.PaceAhead or LightPattern.Abeam or LightPattern.Wingman or LightPattern.BrakeHover => 0.8,
+        LightPattern.Above or LightPattern.Below => 0.75,
+        LightPattern.TicTac => 0.7,
+        LightPattern.Inspect or LightPattern.PopUp or LightPattern.Formation => 0.6,
+        LightPattern.Orbit => 0.4,
+        _ => 0.5,
+    };
 
     private DisruptionPlan BuildPlan(DisruptionKind kind, double phaseDur, bool signature)
     {
@@ -489,10 +538,10 @@ public sealed class EncounterDirector
             if (LightsEnabled) _lights.Start(LightPattern.PopUp, 1, 7, ufoTitle, SpawnAsAircraft);
             await Task.Delay(TimeSpan.FromSeconds(5 + _rng.NextDouble() * 4), ct);
 
-            // 2) UFO accelerates away.
+            // 2) UFO accelerates away into the distance, then is gone.
             _audio.SetSubBassVolume(0.7);
-            _lights.SetPattern(LightPattern.Streak);
-            await Task.Delay(TimeSpan.FromSeconds(3), ct);
+            _lights.BeginDepart(majestic: false);
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
             _lights.Stop();
             _audio.SetSubBassVolume(0.2);
 

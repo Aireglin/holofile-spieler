@@ -24,6 +24,22 @@ public enum LightPattern
     Streak,
     /// <summary>Comes from far behind and overtakes very close, passing ahead.</summary>
     Overtake,
+    /// <summary>Paces directly ahead of the aircraft.</summary>
+    PaceAhead,
+    /// <summary>Holds level, off to one side (formation abeam).</summary>
+    Abeam,
+    /// <summary>Holds above the aircraft.</summary>
+    Above,
+    /// <summary>Holds just below the aircraft.</summary>
+    Below,
+    /// <summary>Slowly transits between positions around you (long sighting).</summary>
+    Inspect,
+    /// <summary>Comes in from far away and settles into close formation.</summary>
+    Approach,
+    /// <summary>Shoots in from ahead, brakes hard ~12 m in front and hovers.</summary>
+    BrakeHover,
+    /// <summary>Accelerates away along its current bearing, then despawns.</summary>
+    Depart,
     /// <summary>A single massive object: slow, looming, with occasional
     /// "impossible" instantaneous repositions. Reads well by day.</summary>
     Mothership,
@@ -63,6 +79,7 @@ public sealed class LightChoreographer
         public Vars V = new();
         public double[] Current = new double[3];  // right, fwd, up (metres)
         public double[] Smoothed = new double[3];  // low-passed output
+        public double[] DepartFrom = new double[3]; // bearing captured when departing
         public bool SmoothInit;
         public double NextJump;
     }
@@ -79,6 +96,7 @@ public sealed class LightChoreographer
     private string _title = "";
     private bool _asAircraft;
     private long _frame;
+    private double _departAccel = 500;
 
     public bool IsActive { get; private set; }
     /// <summary>Distance (m) of the nearest spawned object, or null if none.</summary>
@@ -149,6 +167,21 @@ public sealed class LightChoreographer
         }
     }
 
+    /// <summary>Switch every object into a fast (or majestic) departure along its
+    /// current bearing — it shoots away into the distance before being despawned.</summary>
+    public void BeginDepart(bool majestic)
+    {
+        if (!IsActive) return;
+        _departAccel = majestic ? 90 : 520;
+        foreach (var l in _lights)
+        {
+            var cur = (_pattern == LightPattern.TicTac || !l.SmoothInit) ? l.Current : l.Smoothed;
+            Array.Copy(cur, l.DepartFrom, 3);
+        }
+        _pattern = LightPattern.Depart;
+        _start = DateTime.UtcNow;
+    }
+
     public void Stop()
     {
         _timer.Stop();
@@ -203,9 +236,10 @@ public sealed class LightChoreographer
 
             var raw = OffsetFor(l, t);
             double[] off;
-            if (_pattern == LightPattern.TicTac)
+            // Instant patterns (jumps / shooting motion) are not smoothed.
+            if (_pattern is LightPattern.TicTac or LightPattern.Depart)
             {
-                off = raw; // instant jumps are the whole point — don't smooth
+                off = raw;
             }
             else
             {
@@ -215,12 +249,16 @@ public sealed class LightChoreographer
                 off = l.Smoothed;
             }
 
+            // Patterns that are intentionally close ignore the minimum distance.
+            bool ignoreMin = _pattern is LightPattern.Beam or LightPattern.BrakeHover
+                                       or LightPattern.Overtake or LightPattern.Depart;
+
             // Optionally keep objects beyond a minimum distance (avoids the
             // close-range stutter; reads as a more distant sighting). Work on a
             // copy so we don't corrupt the stored anchor/smoothed state.
             double[] sent = { off[0], off[1], off[2] };
             double d = Math.Sqrt(sent[0] * sent[0] + sent[1] * sent[1] + sent[2] * sent[2]);
-            if (MinDistanceMeters > 1 && d < MinDistanceMeters)
+            if (!ignoreMin && MinDistanceMeters > 1 && d < MinDistanceMeters)
             {
                 if (d > 1) { double s = MinDistanceMeters / d; sent[0] *= s; sent[1] *= s; sent[2] *= s; }
                 else { sent[1] = MinDistanceMeters; } // degenerate: push straight ahead
@@ -337,6 +375,61 @@ public sealed class LightChoreographer
                 // Sits ahead, then accelerates forward away (uses raw t for punch).
                 double f = 500 + 220 * t * t;
                 return new[] { v.Side * 50 + 12 * wr, f, 40 + 12 * wu };
+            }
+
+            case LightPattern.PaceAhead:
+                return new[] { 14 * wr, 120 + 80 * v.Dist + 18 * wf, 8 + 12 * wu };
+
+            case LightPattern.Abeam:
+                return new[] { v.Side * (70 + 50 * v.Dist) + 16 * wr, 12 * wf, 5 + 10 * wu };
+
+            case LightPattern.Above:
+                return new[] { 16 * wr, 22 * wf, 60 + 40 * v.Dist + 12 * wu };
+
+            case LightPattern.Below:
+                return new[] { 16 * wr, 22 * wf, -(40 + 30 * v.Dist) + 12 * wu };
+
+            case LightPattern.Inspect:
+            {
+                // Slow, close-ish transit around you between positions.
+                double radius = 120 + 80 * v.Dist;
+                double ang = ts * 0.08 + ph + idx * (2 * Math.PI / Math.Max(1, n));
+                return new[]
+                {
+                    radius * Math.Cos(ang) + 15 * wr,
+                    radius * Math.Sin(ang) + 15 * wf,
+                    20 + 30 * Math.Sin(ts * 0.06 + ph) + 10 * wu,
+                };
+            }
+
+            case LightPattern.Approach:
+            {
+                // Comes from far away and settles into close formation ahead.
+                double u = Math.Clamp(t / Math.Max(1.0, _durationSec), 0, 1);
+                double dist = Lerp(2600, 130, u);
+                return new[] { v.Side * 0.30 * dist + 14 * wr, 0.90 * dist, 0.15 * dist + 10 * wu };
+            }
+
+            case LightPattern.BrakeHover:
+            {
+                // Shoots in from far ahead, decelerates and hovers ~12 m in front.
+                const double brakeTime = 2.5;
+                double u = Math.Clamp(t / brakeTime, 0, 1);
+                double eased = 1 - (1 - u) * (1 - u); // decelerating ease-out
+                double dist = Lerp(3000, 12, eased);
+                return new[] { 5 * wr, dist, 4 + 6 * wu };
+            }
+
+            case LightPattern.Depart:
+            {
+                // Accelerate away along the bearing captured at departure start.
+                var fr = l.DepartFrom;
+                double mag = Math.Sqrt(fr[0] * fr[0] + fr[1] * fr[1] + fr[2] * fr[2]);
+                double ux, uy, uz;
+                if (mag < 1) { ux = 0; uy = 1; uz = 0.2; mag = 50; }
+                else { ux = fr[0] / mag; uy = fr[1] / mag; uz = fr[2] / mag; }
+                double dist = Math.Max(mag, 40) + _departAccel * t * t;
+                return new[] { ux * dist, uy * dist, uz * dist };
             }
 
             case LightPattern.Overtake:

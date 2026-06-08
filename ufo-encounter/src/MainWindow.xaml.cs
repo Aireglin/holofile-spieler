@@ -305,6 +305,10 @@ public partial class MainWindow : Window
     private void TestLightTicTac_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.TicTac, 12);
     private void TestLightWingman_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.Wingman, 12);
     private void TestLightPopup_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.PopUp, 12);
+    private void TestLightPaceAhead_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.PaceAhead, 14);
+    private void TestLightAbeam_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.Abeam, 14);
+    private void TestLightInspect_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.Inspect, 24);
+    private void TestLightBrake_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.BrakeHover, 10);
 
     private void RandomChk_Changed(object sender, RoutedEventArgs e) =>
         _director?.SetRandomMode(RandomChk.IsChecked == true);
