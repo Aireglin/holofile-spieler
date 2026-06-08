@@ -67,6 +67,8 @@ public sealed class SimConnectClient : IDisposable
         TOGGLE_MASTER_BATTERY,
         TOGGLE_ALTERNATOR1,
         TOGGLE_ALTERNATOR2,
+        TOGGLE_ALTERNATOR3,
+        TOGGLE_ALTERNATOR4,
         TOGGLE_MASTER_ALTERNATOR,
         TOGGLE_AVIONICS_MASTER,
         // Engine kill / restart (used by the deep blackout's optional engine cut).

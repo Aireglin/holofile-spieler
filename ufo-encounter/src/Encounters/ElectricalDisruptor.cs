@@ -62,10 +62,17 @@ public sealed class ElectricalDisruptor
     private readonly Action<string>? _log;
     private readonly Random _rng = new();
 
-    // Believed state of each channel (true = on).
+    // Believed state of each channel (true = on). Toggling alternators 1-4 covers
+    // singles (C172), twins (DA62) and beyond; absent alternators are harmless no-ops.
+    private static readonly SimConnectClient.SimEvent[] AltEvents =
+    {
+        SimConnectClient.SimEvent.TOGGLE_ALTERNATOR1,
+        SimConnectClient.SimEvent.TOGGLE_ALTERNATOR2,
+        SimConnectClient.SimEvent.TOGGLE_ALTERNATOR3,
+        SimConnectClient.SimEvent.TOGGLE_ALTERNATOR4,
+    };
     private bool _battery = true;
-    private bool _alt1 = true;
-    private bool _alt2 = true;
+    private readonly bool[] _alts = { true, true, true, true };
     private bool _avionics = true;
     private bool _engineCut;
 
@@ -177,8 +184,8 @@ public sealed class ElectricalDisruptor
     {
         var s = _sim.State;
         _battery = s.MasterBattery > 0.5;
-        _alt1 = s.MasterAlternator > 0.5;
-        _alt2 = true;     // no reliable per-frame SimVar mapped; assume on
+        _alts[0] = s.MasterAlternator > 0.5;
+        for (int i = 1; i < _alts.Length; i++) _alts[i] = true; // no per-frame SimVar; assume on
         _avionics = true;
         _engineCut = false;
     }
@@ -186,15 +193,14 @@ public sealed class ElectricalDisruptor
     private void SetPower(bool on, DisruptionPlan plan)
     {
         SetBattery(on);
-        if (plan.CutAlternator) SetAlt1(on);
+        if (plan.CutAlternator) SetAllAlternators(on);
         if (plan.CutAvionics) SetAvionics(on);
     }
 
     private void SetAllPower(bool on)
     {
         SetBattery(on);
-        SetAlt1(on);
-        SetAlt2(on);
+        SetAllAlternators(on);
         SetAvionics(on);
     }
 
@@ -202,8 +208,8 @@ public sealed class ElectricalDisruptor
     private void RestorePower()
     {
         if (!_battery) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_MASTER_BATTERY); _battery = true; }
-        if (!_alt1) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR1); _alt1 = true; }
-        if (!_alt2) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR2); _alt2 = true; }
+        for (int i = 0; i < _alts.Length; i++)
+            if (!_alts[i]) { _sim.Transmit(AltEvents[i]); _alts[i] = true; }
         if (!_avionics) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_AVIONICS_MASTER); _avionics = true; }
         if (_engineCut) { _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_START); _engineCut = false; }
         _log?.Invoke("Power restored.");
@@ -216,18 +222,14 @@ public sealed class ElectricalDisruptor
         _battery = on;
     }
 
-    private void SetAlt1(bool on)
+    private void SetAllAlternators(bool on)
     {
-        if (_alt1 == on) return;
-        _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR1);
-        _alt1 = on;
-    }
-
-    private void SetAlt2(bool on)
-    {
-        if (_alt2 == on) return;
-        _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_ALTERNATOR2);
-        _alt2 = on;
+        for (int i = 0; i < _alts.Length; i++)
+        {
+            if (_alts[i] == on) continue;
+            _sim.Transmit(AltEvents[i]);
+            _alts[i] = on;
+        }
     }
 
     private void SetAvionics(bool on)
