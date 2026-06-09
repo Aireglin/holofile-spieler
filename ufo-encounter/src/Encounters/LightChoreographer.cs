@@ -172,7 +172,7 @@ public sealed class LightChoreographer
     public void BeginDepart(bool majestic)
     {
         if (!IsActive) return;
-        _departAccel = majestic ? 90 : 520;
+        _departAccel = majestic ? 55 : 230;   // gentler ramp = visible streak, not a blink
         foreach (var l in _lights)
         {
             var cur = (_pattern == LightPattern.TicTac || !l.SmoothInit) ? l.Current : l.Smoothed;

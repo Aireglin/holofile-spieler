@@ -257,7 +257,7 @@ public sealed class EncounterDirector
                 _proxTarget = 0; _subBassOn = false;
                 _lights.BeginDepart(mothership);
                 _trace?.Invoke("  · Wegflug");
-                try { await Task.Delay(TimeSpan.FromSeconds(mothership ? 5 : 3.5), ct); }
+                try { await Task.Delay(TimeSpan.FromSeconds(mothership ? 6 : 4.5), ct); }
                 catch (OperationCanceledException) { }
             }
 
@@ -563,14 +563,20 @@ public sealed class EncounterDirector
         }
     }
 
-    /// <summary>Spawn lights on their own for a quick visual test.</summary>
-    public void TestLights(LightPattern pattern, double durationSec, bool mothership = false)
+    /// <summary>Spawn lights on their own for a quick visual test — ends with the
+    /// same fly-away as a real encounter, so you can see the departure too.</summary>
+    public async void TestLights(LightPattern pattern, double durationSec, bool mothership = false)
     {
         if (!LightsEnabled) { _trace?.Invoke("Lights are disabled."); return; }
         string title = mothership ? MothershipTitle : LightObjectTitle;
         _lights.Start(pattern, mothership ? 1 : LightCount, durationSec, title, SpawnAsAircraft);
-        Task.Delay(TimeSpan.FromSeconds(durationSec)).ContinueWith(
-            _ => _lights.Stop(), TaskScheduler.FromCurrentSynchronizationContext());
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(durationSec));
+            _lights.BeginDepart(mothership);
+            await Task.Delay(TimeSpan.FromSeconds(mothership ? 6 : 4.5));
+        }
+        finally { _lights.Stop(); }
     }
 
     private double RandomDuration()
