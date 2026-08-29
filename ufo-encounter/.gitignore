@@ -1,0 +1,6 @@
+bin/
+obj/
+*.user
+.vs/
+sightings.csv
+settings.json
