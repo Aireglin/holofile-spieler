@@ -1,0 +1,598 @@
+using System.Windows.Threading;
+using UfoEncounter.Audio;
+using UfoEncounter.Sim;
+using UfoEncounter.Util;
+
+namespace UfoEncounter.Encounters;
+
+/// <summary>
+/// The "director": picks and times encounters, either on demand (test buttons)
+/// or autonomously (random mode). It runs each encounter as an ordered list of
+/// PHASES (approach → observation → escalation → departure when multi-phase),
+/// coordinating lights, electrics and a live, distance-driven audio mix. A
+/// "dread" level scales how close/long/aggressive things get, and rare
+/// "signature events" upgrade an encounter into something spectacular.
+/// </summary>
+public sealed class EncounterDirector
+{
+    private readonly SimConnectClient _sim;
+    private readonly ElectricalDisruptor _disruptor;
+    private readonly LightChoreographer _lights;
+    private readonly AudioEngine _audio;
+    private readonly Logbook _log;
+    private readonly Action<string>? _trace;
+
+    private readonly DispatcherTimer _scheduler;
+    private readonly DispatcherTimer _audioTimer;
+    private Random _rng = new();
+    private CancellationTokenSource? _current;
+
+    // Live audio targets, consumed (and smoothed) by the audio timer.
+    private double _proxTarget;
+    private bool _subBassOn;
+    private double _droneVol, _subVol, _statVol;
+
+    // ---- Tunables (bound to the UI) ----
+    public bool RealismLock { get; set; } = true;
+    public double MinAglFeet { get; set; } = 1500;
+    public double FrequencyPerMin { get; set; } = 1.0;
+    public double MinDurationSec { get; set; } = 4;
+    public double MaxDurationSec { get; set; } = 12;
+    public double Intensity { get; set; } = 0.6;
+    /// <summary>0..1 — escalation aggressiveness, proximity and signature odds.</summary>
+    public double Dread { get; set; } = 0.4;
+    /// <summary>Run encounters as multi-phase mini-stories.</summary>
+    public bool MultiPhase { get; set; } = true;
+    /// <summary>Play the one-shot approach whoosh (off by default — too prominent).</summary>
+    public bool WhooshEnabled { get; set; } = false;
+    /// <summary>Whoosh loudness 0..1 when enabled.</summary>
+    public double WhooshVolume { get; set; } = 0.35;
+    /// <summary>In random mode, bias scenario choice by time of day (night → lights,
+    /// day → solid/mothership).</summary>
+    public bool DayNightBias { get; set; } = true;
+    /// <summary>Play the radio-static/crackle layer during electrical failures
+    /// (off by default — the hum alone is preferred).</summary>
+    public bool StaticEnabled { get; set; } = false;
+
+    public double BlackoutMinSec { get; set; } = 8;
+    public double BlackoutMaxSec { get; set; } = 25;
+    /// <summary>Probability (0..1) that an encounter's electrical effect actually
+    /// fires this run — so it's "sometimes a failure, sometimes just lights".</summary>
+    public double DisruptionChance { get; set; } = 0.75;
+    /// <summary>Total blackout also shuts the engine down (and auto-restarts it).</summary>
+    public bool DeepBlackoutCutsEngine { get; set; } = true;
+    /// <summary>Use engine auto-shutdown only for the blackout (for jets/turbines,
+    /// where per-channel toggles don't fully work). Off = GA-friendly (C172).</summary>
+    public bool FullShutdownForBlackout { get; set; } = false;
+
+    public string LightObjectTitle { get; set; } = "";
+    public string MothershipTitle { get; set; } = "";
+    public int LightCount { get; set; } = 2;
+    public bool LightsEnabled { get; set; } = true;
+    /// <summary>Spawn objects as aircraft (AICreateNonATCAircraft) — needed for
+    /// titles that are aircraft (e.g. a flyable UFO).</summary>
+    public bool SpawnAsAircraft { get; set; } = false;
+
+    // Holy Grail "beam" — bright object(s) hovering above the aircraft.
+    public string BeamTitle { get; set; } = "";
+    public int BeamCount { get; set; } = 3;
+    public double BeamHeight { get; set; } = 30;
+
+    /// <summary>Aircraft title for the chasing jet (e.g. the stock F/A-18).</summary>
+    public string JetTitle { get; set; } = "";
+
+    public bool IsRandomMode => _scheduler.IsEnabled;
+    public bool IsEncounterActive { get; private set; }
+
+    public event Action<string, bool>? EncounterStateChanged; // (name, active)
+
+    public EncounterDirector(SimConnectClient sim, ElectricalDisruptor disruptor,
+        LightChoreographer lights, AudioEngine audio, Logbook log, Action<string>? trace = null)
+    {
+        _sim = sim;
+        _disruptor = disruptor;
+        _lights = lights;
+        _audio = audio;
+        _log = log;
+        _trace = trace;
+
+        _scheduler = new DispatcherTimer();
+        _scheduler.Tick += OnSchedulerTick;
+        _audioTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        _audioTimer.Tick += OnAudioTick;
+    }
+
+    public void SetSeed(int? seed)
+    {
+        _rng = seed.HasValue ? new Random(seed.Value) : new Random();
+        _trace?.Invoke(seed.HasValue ? $"Seed set to {seed}." : "Seed randomized.");
+    }
+
+    public void SetRandomMode(bool on)
+    {
+        if (on) { ScheduleNext(); _scheduler.Start(); _trace?.Invoke("Random mode ON."); }
+        else { _scheduler.Stop(); _trace?.Invoke("Random mode OFF."); }
+    }
+
+    private void ScheduleNext()
+    {
+        double avgGap = 60.0 / Math.Max(0.05, FrequencyPerMin);
+        _scheduler.Interval = TimeSpan.FromSeconds(avgGap * (0.5 + _rng.NextDouble()));
+    }
+
+    private async void OnSchedulerTick(object? sender, EventArgs e)
+    {
+        ScheduleNext();
+        if (IsEncounterActive) return;
+        if (!CanTriggerNow()) { _trace?.Invoke("Skipped (realism-lock)."); return; }
+
+        // Rare scripted special: the jet chase.
+        if (_rng.NextDouble() < 0.08) { await RunJetChaseAsync(); return; }
+
+        var scenario = PickScenario();
+
+        // Full randomization for autonomous encounters: roll the tunables fresh
+        // each time (and restore the user's manual values afterwards), so nothing
+        // becomes predictable. Everything stays combinable.
+        int sCount = LightCount; double sDread = Dread;
+        double sSpeed = _lights.SpeedScale, sMin = _lights.MinDistanceMeters;
+        try
+        {
+            LightCount = _rng.Next(1, 6);                                 // 1..5
+            Dread = _rng.NextDouble();                                    // drives escalation + Holy-Grail odds
+            _lights.SpeedScale = 0.4 + _rng.NextDouble() * 0.5;           // 0.4..0.9
+            _lights.MinDistanceMeters = 120 + _rng.NextDouble() * 700;    // 120..820 m
+            // Non-mothership scenarios get a randomized light pattern so the same
+            // scenario never looks the same twice.
+            if (!scenario.Mothership && _rng.NextDouble() < 0.75)
+                scenario = scenario with { Lights = RandomLightPattern() };
+            await TriggerAsync(scenario);
+        }
+        finally
+        {
+            LightCount = sCount; Dread = sDread;
+            _lights.SpeedScale = sSpeed; _lights.MinDistanceMeters = sMin;
+        }
+    }
+
+
+    /// <summary>Weighted random scenario pick. With day/night bias on, night
+    /// favours light-only scenarios and day favours the solid mothership.</summary>
+    private EncounterScenario PickScenario()
+    {
+        var cat = EncounterScenario.Catalog;
+        if (!DayNightBias) return cat[_rng.Next(cat.Count)];
+
+        int tod = (int)Math.Round(_sim.State.TimeOfDay); // 1=dawn 2=day 3=dusk 4=night
+        var weights = new double[cat.Count];
+        double total = 0;
+        for (int i = 0; i < cat.Count; i++)
+        {
+            double w = 1.0;
+            bool hasLights = cat[i].Lights is not null && !cat[i].Mothership;
+            if (tod == 4) w = cat[i].Mothership ? 0.6 : (hasLights ? 3.0 : 1.0); // night
+            else if (tod == 2) w = cat[i].Mothership ? 3.0 : 1.0;                 // day
+            weights[i] = w;
+            total += w;
+        }
+
+        double r = _rng.NextDouble() * total;
+        for (int i = 0; i < cat.Count; i++)
+        {
+            r -= weights[i];
+            if (r <= 0) return cat[i];
+        }
+        return cat[^1];
+    }
+
+    private bool CanTriggerNow()
+    {
+        if (!_sim.IsConnected) return false;
+        if (!RealismLock) return true;
+        var s = _sim.State;
+        return s.OnGround < 0.5 && s.AltitudeAgl >= MinAglFeet;
+    }
+
+    // ---- Phases ----
+
+    private sealed record Phase(
+        string Name, double Dur, LightPattern? Light, DisruptionKind Disruption,
+        double Proximity, bool Whoosh, bool SubBass, bool Silence);
+
+    public async Task TriggerAsync(EncounterScenario scenario, double? durationSec = null)
+    {
+        if (IsEncounterActive) return;
+
+        double visual = durationSec ?? RandomDuration();
+        bool signature = _rng.NextDouble() < SignatureChance();
+        // A signature event sometimes becomes the full "Holy Grail".
+        if (signature && _rng.NextDouble() < 0.5) { await RunHolyGrailAsync(); return; }
+        // Per-run roll: does the electrical effect fire at all this time?
+        bool allowElec = signature || _rng.NextDouble() < DisruptionChance;
+        var phases = (MultiPhase || signature)
+            ? BuildChain(scenario, signature, allowElec)
+            : BuildSinglePhase(scenario, visual, allowElec);
+
+        var ct = (_current = new CancellationTokenSource()).Token;
+        IsEncounterActive = true;
+        EncounterStateChanged?.Invoke(scenario.Name, true);
+        if (signature) _trace?.Invoke("✦ SIGNATURE EVENT ✦");
+        _trace?.Invoke($"▶ {scenario.Name}{(MultiPhase || signature ? " (mehrphasig)" : "")}");
+        _log.Record(signature ? $"{scenario.Name} ✦" : scenario.Name, _sim.State);
+
+        bool mothership = scenario.Mothership || signature;
+        string title = mothership ? MothershipTitle : LightObjectTitle;
+        bool lightsStarted = false;
+        Task elec = Task.CompletedTask;
+
+        _audio.StartLayers();
+        _audioTimer.Start();
+        try
+        {
+            foreach (var ph in phases)
+            {
+                _proxTarget = ph.Proximity;
+                _subBassOn = ph.SubBass;
+                if (ph.Silence) { _proxTarget = 0; _subBassOn = false; _audio.HardSilence(); }
+                if (ph.Whoosh && WhooshEnabled) _audio.PlayWhoosh(WhooshVolume);
+
+                if (LightsEnabled && ph.Light is LightPattern pat)
+                {
+                    if (!lightsStarted) { _lights.Start(pat, mothership ? 1 : LightCount, ph.Dur, title, SpawnAsAircraft); lightsStarted = true; }
+                    else _lights.SetPattern(pat);
+                }
+
+                if (ph.Disruption != DisruptionKind.None && elec.IsCompleted)
+                    elec = _disruptor.RunAsync(BuildPlan(ph.Disruption, ph.Dur, signature), ct);
+
+                _trace?.Invoke($"  · {ph.Name} ({ph.Dur:0.#}s)");
+                try { await Task.Delay(TimeSpan.FromSeconds(ph.Dur), ct); }
+                catch (OperationCanceledException) { break; }
+            }
+
+            // Fly-away finish: objects shoot off (mothership glides majestically)
+            // into the distance before being despawned — they don't just vanish.
+            if (lightsStarted)
+            {
+                _proxTarget = 0; _subBassOn = false;
+                _lights.BeginDepart(mothership);
+                _trace?.Invoke("  · Wegflug");
+                try { await Task.Delay(TimeSpan.FromSeconds(mothership ? 6 : 4.5), ct); }
+                catch (OperationCanceledException) { }
+            }
+
+            _audio.HardSilence();
+            _lights.Stop();
+            try { await elec; } catch (OperationCanceledException) { }
+        }
+        finally
+        {
+            _audioTimer.Stop();
+            _audio.StopAll();
+            _lights.Stop();
+            IsEncounterActive = false;
+            EncounterStateChanged?.Invoke(scenario.Name, false);
+            _trace?.Invoke($"■ {scenario.Name} ended.");
+        }
+    }
+
+    private double SignatureChance() => 0.015 + 0.05 * Dread; // ~1.5% .. 6.5%
+
+    private List<Phase> BuildSinglePhase(EncounterScenario s, double visual, bool allowElec) => new()
+    {
+        new Phase("Encounter", visual, s.Lights, allowElec ? s.Disruption : DisruptionKind.None,
+            Proximity: s.Mothership ? 0.5 : 0.6, Whoosh: true, SubBass: s.Mothership, Silence: false),
+    };
+
+    private static readonly LightPattern[] ChainPatterns =
+    {
+        LightPattern.PaceAhead, LightPattern.Abeam, LightPattern.Above, LightPattern.Below,
+        LightPattern.Wingman, LightPattern.Formation, LightPattern.PopUp, LightPattern.Orbit,
+        LightPattern.Inspect, LightPattern.TicTac,
+    };
+
+    private LightPattern RandomLightPattern() => ChainPatterns[_rng.Next(ChainPatterns.Length)];
+
+    /// <summary>Builds a randomized chain of patterns (with sprinkled failures), so
+    /// a single encounter flows from one behaviour into another and is never the
+    /// same twice. Everything stays combinable; the fly-away finish is added by
+    /// the caller. Mothership/signature stay slow and majestic.</summary>
+    private List<Phase> BuildChain(EncounterScenario s, bool signature, bool allowElec)
+    {
+        double d = Dread;
+        var phases = new List<Phase>();
+        bool ship = s.Mothership || signature;
+
+        if (ship)
+        {
+            phases.Add(new("Annäherung", 5 + 3 * (1 - d), LightPattern.Mothership, DisruptionKind.None,
+                Proximity: 0.3, Whoosh: true, SubBass: false, Silence: false));
+            var disr = allowElec && (signature || _rng.NextDouble() < 0.5 + 0.4 * d)
+                ? DisruptionKind.DeepBlackout : DisruptionKind.None;
+            phases.Add(new("Präsenz", signature ? 16 + 12 * d : 10 + 10 * d, LightPattern.Mothership, disr,
+                Proximity: Math.Min(1.0, 0.6 + 0.3 * d), Whoosh: false, SubBass: true, Silence: false));
+            return phases;
+        }
+
+        // Optional arrival.
+        double r = _rng.NextDouble();
+        if (r < 0.35)
+            phases.Add(new("Anflug (Bremsung)", 5, LightPattern.BrakeHover, DisruptionKind.None,
+                Proximity: 0.85, Whoosh: true, SubBass: false, Silence: false));
+        else if (r < 0.65)
+            phases.Add(new("Annäherung", 9 + 4 * _rng.NextDouble(), LightPattern.Approach, DisruptionKind.None,
+                Proximity: 0.4, Whoosh: false, SubBass: false, Silence: false));
+
+        // 2–4 chained behaviours, each maybe with its own failure.
+        int segs = _rng.Next(2, 5);
+        for (int i = 0; i < segs; i++)
+        {
+            var pat = RandomLightPattern();
+            var disr = (allowElec && _rng.NextDouble() < 0.35 + 0.4 * d)
+                ? RandomDisruption() : DisruptionKind.None;
+            bool sub = disr != DisruptionKind.None || _rng.NextDouble() < 0.5;
+            phases.Add(new($"Muster: {pat}", SegDuration(pat), pat, disr,
+                Proximity: ProximityFor(pat), Whoosh: false, SubBass: sub, Silence: false));
+        }
+        return phases;
+    }
+
+    private double SegDuration(LightPattern p) => p switch
+    {
+        LightPattern.Inspect or LightPattern.Orbit => 18 + _rng.NextDouble() * 22,   // long sightings
+        LightPattern.PaceAhead or LightPattern.Abeam or LightPattern.Above
+            or LightPattern.Below or LightPattern.Wingman or LightPattern.Formation => 8 + _rng.NextDouble() * 12,
+        LightPattern.TicTac => 4 + _rng.NextDouble() * 5,
+        _ => 6 + _rng.NextDouble() * 6,
+    };
+
+    private DisruptionKind RandomDisruption()
+    {
+        double r = _rng.NextDouble();
+        if (r < 0.5) return DisruptionKind.Stutter;
+        if (r < 0.8) return DisruptionKind.StutterToBlackout;
+        return DisruptionKind.DeepBlackout;
+    }
+
+    private static double ProximityFor(LightPattern p) => p switch
+    {
+        LightPattern.PaceAhead or LightPattern.Abeam or LightPattern.Wingman or LightPattern.BrakeHover => 0.8,
+        LightPattern.Above or LightPattern.Below => 0.75,
+        LightPattern.TicTac => 0.7,
+        LightPattern.Inspect or LightPattern.PopUp or LightPattern.Formation => 0.6,
+        LightPattern.Orbit => 0.4,
+        _ => 0.5,
+    };
+
+    private DisruptionPlan BuildPlan(DisruptionKind kind, double phaseDur, bool signature)
+    {
+        if (kind == DisruptionKind.DeepBlackout)
+        {
+            double lo = Math.Min(BlackoutMinSec, BlackoutMaxSec);
+            double hi = Math.Max(BlackoutMinSec, BlackoutMaxSec);
+            double dur = lo + _rng.NextDouble() * (hi - lo);
+            if (signature) dur = Math.Max(dur, BlackoutMaxSec); // signature: long & dark
+            return new DisruptionPlan
+            {
+                Kind = DisruptionKind.DeepBlackout,
+                StartDelay = TimeSpan.FromSeconds(_rng.NextDouble() * 3),
+                Duration = TimeSpan.FromSeconds(dur),
+                CutEngine = DeepBlackoutCutsEngine,
+                UseFullShutdown = FullShutdownForBlackout,
+            };
+        }
+
+        if (kind == DisruptionKind.StutterToBlackout)
+        {
+            double lo = Math.Min(BlackoutMinSec, BlackoutMaxSec);
+            double hi = Math.Max(BlackoutMinSec, BlackoutMaxSec);
+            return new DisruptionPlan
+            {
+                Kind = DisruptionKind.StutterToBlackout,
+                Duration = TimeSpan.FromSeconds(Math.Min(phaseDur, 4)), // flicker phase
+                BlackoutDuration = TimeSpan.FromSeconds(lo + _rng.NextDouble() * (hi - lo)),
+                EscalateChance = 0.6,
+                CutEngine = DeepBlackoutCutsEngine,
+                UseFullShutdown = FullShutdownForBlackout,
+                StutterStep = TimeSpan.FromMilliseconds(450 - 250 * Intensity),
+            };
+        }
+
+        return new DisruptionPlan
+        {
+            Kind = kind,
+            Duration = TimeSpan.FromSeconds(phaseDur),
+            StutterStep = TimeSpan.FromMilliseconds(450 - 250 * Intensity),
+        };
+    }
+
+    // ---- Live audio mix (distance-driven, smoothed) ----
+
+    private void OnAudioTick(object? sender, EventArgs e)
+    {
+        // Real proximity from the nearest spawned object overrides the phase floor.
+        double proxFromLights = 0;
+        if (_lights.NearestMeters is double m)
+            proxFromLights = Math.Clamp(1 - (m - 60) / 1400.0, 0, 1);
+        double prox = Math.Max(_proxTarget, proxFromLights);
+
+        double droneTarget = Math.Clamp(Intensity * (0.15 + 0.85 * prox), 0, 1);
+        double subTarget = _subBassOn ? Math.Clamp((0.4 + 0.6 * Dread) * prox, 0, 1) : 0;
+        double statTarget = (StaticEnabled && _disruptor.IsActive) ? 0.45 * (0.5 + 0.5 * Intensity) : 0;
+
+        _droneVol = Lerp(_droneVol, droneTarget, 0.12);
+        _subVol = Lerp(_subVol, subTarget, 0.12);
+        _statVol = Lerp(_statVol, statTarget, 0.20);
+
+        _audio.SetDroneVolume(_droneVol);
+        _audio.SetSubBassVolume(_subVol);
+        _audio.SetStaticVolume(_statVol);
+    }
+
+    private static double Lerp(double a, double b, double k) => a + (b - a) * k;
+
+    /// <summary>The "Holy Grail" (Tempus Fugit): UFO dances → vanishes →
+    /// power + engine die in the dark → a bright beam appears overhead with a
+    /// jumpscare, hovers in total silence → vanishes → systems restart.</summary>
+    public async Task RunHolyGrailAsync()
+    {
+        if (IsEncounterActive) return;
+        if (!_sim.IsConnected) { _trace?.Invoke("Holy Grail: not connected."); return; }
+        if (_sim.State.OnGround > 0.5) { _trace?.Invoke("Holy Grail: skipped (on ground)."); return; }
+        if (_sim.State.AltitudeAgl < 1000)
+            _trace?.Invoke("⚠ Holy Grail: Motor wird abgeschaltet — auf ausreichende Höhe achten!");
+        var ct = (_current = new CancellationTokenSource()).Token;
+        IsEncounterActive = true;
+        EncounterStateChanged?.Invoke("Holy Grail", true);
+        _trace?.Invoke("✦✦ HOLY GRAIL (Tempus Fugit) ✦✦");
+        _log.Record("Holy Grail ✦✦", _sim.State);
+
+        double savedMin = _lights.MinDistanceMeters;
+        Task elec = Task.CompletedTask;
+        try
+        {
+            // 1) UFO appears and dances; electronics MAY misbehave.
+            _audio.StartLayers();
+            _audio.SetDroneVolume(Math.Clamp(0.55 * (0.4 + 0.6 * Intensity), 0, 1));
+            _audio.SetSubBassVolume(0.4);
+            string ufoTitle = !string.IsNullOrWhiteSpace(LightObjectTitle) ? LightObjectTitle : MothershipTitle;
+            if (LightsEnabled) _lights.Start(LightPattern.PopUp, Math.Max(1, LightCount), 8, ufoTitle, SpawnAsAircraft);
+            if (_rng.NextDouble() < 0.5)
+                elec = _disruptor.RunAsync(new DisruptionPlan
+                {
+                    Kind = DisruptionKind.Stutter,
+                    Duration = TimeSpan.FromSeconds(5),
+                    StutterStep = TimeSpan.FromMilliseconds(300),
+                }, ct);
+            await Task.Delay(TimeSpan.FromSeconds(8), ct);
+
+            // 2) UFO suddenly gone; brief quiet.
+            _lights.Stop();
+            try { await elec; } catch (OperationCanceledException) { }
+            _audio.HardSilence();
+
+            // 3) Power AND engine fail for certain; dramatic dark seconds.
+            double darkBefore = 4 + 2 * _rng.NextDouble();
+            double beamDur = 8 + _rng.NextDouble() * 9;   // 8–17 s overhead
+            elec = _disruptor.RunAsync(new DisruptionPlan
+            {
+                Kind = DisruptionKind.DeepBlackout,
+                Duration = TimeSpan.FromSeconds(darkBefore + beamDur + 1.0), // restore just after the beam
+                CutEngine = true,
+                UseFullShutdown = FullShutdownForBlackout,
+            }, ct);
+            await Task.Delay(TimeSpan.FromSeconds(darkBefore), ct);
+
+            // 4) The beam appears overhead + the jumpscare. Total silence otherwise.
+            _audio.PlayJumpscare(0.5);
+            string beamTitle = !string.IsNullOrWhiteSpace(BeamTitle) ? BeamTitle
+                : (!string.IsNullOrWhiteSpace(MothershipTitle) ? MothershipTitle : LightObjectTitle);
+            _lights.MinDistanceMeters = 0;            // the beam must stay close above
+            _lights.BeamHeight = BeamHeight;
+            if (LightsEnabled) _lights.Start(LightPattern.Beam, Math.Max(1, BeamCount), beamDur, beamTitle, SpawnAsAircraft);
+            await Task.Delay(TimeSpan.FromSeconds(beamDur), ct);
+
+            // 5) Beam suddenly gone.
+            _lights.Stop();
+
+            // 6) Systems restart (the deep blackout restores power + engine).
+            try { await elec; } catch (OperationCanceledException) { }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _lights.MinDistanceMeters = savedMin;
+            _audio.StopAll();
+            _lights.Stop();
+            IsEncounterActive = false;
+            EncounterStateChanged?.Invoke("Holy Grail", false);
+            _trace?.Invoke("■ Holy Grail ended.");
+        }
+    }
+
+    /// <summary>JAL1628-style chase: the UFO sits ahead, then accelerates away
+    /// at impossible speed; moments later a fighter jet (F/A-18) overtakes very
+    /// close, chasing it — too slow to catch up.</summary>
+    public async Task RunJetChaseAsync()
+    {
+        if (IsEncounterActive) return;
+        if (!_sim.IsConnected) { _trace?.Invoke("Jet chase: not connected."); return; }
+        if (_sim.State.OnGround > 0.5) { _trace?.Invoke("Jet chase: skipped (on ground)."); return; }
+        var ct = (_current = new CancellationTokenSource()).Token;
+        IsEncounterActive = true;
+        EncounterStateChanged?.Invoke("Jet-Verfolgung", true);
+        _trace?.Invoke("▶ Jet-Verfolgung (JAL1628-Stil)");
+        _log.Record("Jet chase", _sim.State);
+
+        double savedMin = _lights.MinDistanceMeters;
+        string ufoTitle = !string.IsNullOrWhiteSpace(MothershipTitle) ? MothershipTitle : LightObjectTitle;
+        string jetTitle = !string.IsNullOrWhiteSpace(JetTitle) ? JetTitle : ufoTitle;
+        try
+        {
+            _audio.StartLayers();
+            _audio.SetDroneVolume(Math.Clamp(0.5 * (0.4 + 0.6 * Intensity), 0, 1));
+            _audio.SetSubBassVolume(0.35);
+
+            // 1) UFO paces ahead.
+            _lights.MinDistanceMeters = 0;
+            if (LightsEnabled) _lights.Start(LightPattern.PopUp, 1, 7, ufoTitle, SpawnAsAircraft);
+            await Task.Delay(TimeSpan.FromSeconds(5 + _rng.NextDouble() * 4), ct);
+
+            // 2) UFO accelerates away into the distance, then is gone.
+            _audio.SetSubBassVolume(0.7);
+            _lights.BeginDepart(majestic: false);
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            _lights.Stop();
+            _audio.SetSubBassVolume(0.2);
+
+            // 3) Beat, then the jet overtakes very close.
+            await Task.Delay(TimeSpan.FromSeconds(2 + _rng.NextDouble() * 2), ct);
+            if (LightsEnabled) _lights.Start(LightPattern.Overtake, 1, 10, jetTitle, asAircraft: true);
+            await Task.Delay(TimeSpan.FromSeconds(10), ct);
+            _lights.Stop();
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _lights.MinDistanceMeters = savedMin;
+            _audio.StopAll();
+            _lights.Stop();
+            IsEncounterActive = false;
+            EncounterStateChanged?.Invoke("Jet-Verfolgung", false);
+            _trace?.Invoke("■ Jet-Verfolgung ended.");
+        }
+    }
+
+    /// <summary>Spawn lights on their own for a quick visual test — ends with the
+    /// same fly-away as a real encounter, so you can see the departure too.</summary>
+    public async void TestLights(LightPattern pattern, double durationSec, bool mothership = false)
+    {
+        if (!LightsEnabled) { _trace?.Invoke("Lights are disabled."); return; }
+        string title = mothership ? MothershipTitle : LightObjectTitle;
+        _lights.Start(pattern, mothership ? 1 : LightCount, durationSec, title, SpawnAsAircraft);
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(durationSec));
+            _lights.BeginDepart(mothership);
+            await Task.Delay(TimeSpan.FromSeconds(mothership ? 6 : 4.5));
+        }
+        finally { _lights.Stop(); }
+    }
+
+    private double RandomDuration()
+    {
+        double lo = Math.Min(MinDurationSec, MaxDurationSec);
+        double hi = Math.Max(MinDurationSec, MaxDurationSec);
+        return lo + _rng.NextDouble() * (hi - lo);
+    }
+
+    public void PanicStop()
+    {
+        _scheduler.Stop();
+        _current?.Cancel();
+        _audioTimer.Stop();
+        _audio.StopAll();
+        _lights.Stop();
+        _trace?.Invoke("⛔ PANIC STOP — power restored, lights removed, sound off, random mode off.");
+    }
+}
