@@ -24,12 +24,17 @@ public sealed class Logbook
     public IReadOnlyList<SightingEntry> Entries => _entries;
     public event Action<SightingEntry>? EntryAdded;
 
+    public string FilePath => _path;
+
     public Logbook()
     {
-        var dir = AppContext.BaseDirectory;
-        _path = Path.Combine(dir, "sightings.csv");
-        if (!File.Exists(_path))
-            File.WriteAllText(_path, "time_utc,scenario,lat,lon,alt_msl_ft,alt_agl_ft\n");
+        _path = Path.Combine(AppPaths.DataDir, "sightings.csv");
+        try
+        {
+            if (!File.Exists(_path))
+                File.WriteAllText(_path, "time_utc,scenario,lat,lon,alt_msl_ft,alt_agl_ft\n");
+        }
+        catch { /* non-fatal: the logbook just won't be written */ }
     }
 
     public void Record(string scenario, PlaneState s)

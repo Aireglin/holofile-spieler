@@ -20,11 +20,20 @@ public sealed class AppSettings
     public bool MultiPhase { get; set; } = true;
     public bool DayNight { get; set; } = true;
     public bool Whoosh { get; set; } = false;
-    public bool EngineCut { get; set; } = true;
-    public bool FullShutdown { get; set; }
+    /// <summary>Electrical mode (0 switches, 1 switches+engine, 2 full shutdown);
+    /// -1 = not saved yet → derived from the older EngineCut/FullShutdown flags.</summary>
+    public int ElecMode { get; set; } = -1;
+    public bool EngineCut { get; set; } = true;     // legacy (pre-ElecMode)
+    public bool FullShutdown { get; set; }          // legacy (pre-ElecMode)
     public bool Realism { get; set; } = true;
     public bool LightsEnabled { get; set; } = true;
-    public bool SpawnAsAircraft { get; set; }
+    public bool AircraftLights { get; set; } = true;
+    public bool Topmost { get; set; }
+    public int SelectedTab { get; set; }
+    public double? WindowLeft { get; set; }
+    public double? WindowTop { get; set; }
+    public double? WindowWidth { get; set; }
+    public double? WindowHeight { get; set; }
 
     public string LightTitle { get; set; } = "";
     public string MothershipTitle { get; set; } = "";
@@ -37,10 +46,10 @@ public sealed class AppSettings
     public string JetTitle { get; set; } = "";
 }
 
-/// <summary>Loads/saves <see cref="AppSettings"/> as JSON next to the executable.</summary>
+/// <summary>Loads/saves <see cref="AppSettings"/> as JSON in <see cref="AppPaths.DataDir"/>.</summary>
 public static class SettingsStore
 {
-    private static string FilePath => Path.Combine(AppContext.BaseDirectory, "settings.json");
+    private static string FilePath => Path.Combine(AppPaths.DataDir, "settings.json");
 
     public static AppSettings Load()
     {

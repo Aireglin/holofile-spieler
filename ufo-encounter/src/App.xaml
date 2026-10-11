@@ -7,34 +7,85 @@
         <SolidColorBrush x:Key="Panel" Color="#0A1520"/>
         <SolidColorBrush x:Key="Border" Color="#1A3050"/>
         <SolidColorBrush x:Key="Text" Color="#CCDDEF"/>
-        <SolidColorBrush x:Key="Muted" Color="#4A6A88"/>
+        <SolidColorBrush x:Key="Muted" Color="#6F8FAE"/>
         <SolidColorBrush x:Key="Accent" Color="#4488CC"/>
         <SolidColorBrush x:Key="Warn" Color="#FF9900"/>
+        <SolidColorBrush x:Key="LogBg" Color="#02060A"/>
+        <SolidColorBrush x:Key="LogText" Color="#88BBEE"/>
+
+        <!-- Text colour is inherited from the Window's Foreground (no global TextBlock
+             style: it would also recolour text inside ComboBox lists and tab headers). -->
 
         <Style TargetType="Button">
             <Setter Property="Background" Value="{StaticResource Panel}"/>
             <Setter Property="Foreground" Value="{StaticResource Text}"/>
             <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Padding" Value="10,5"/>
             <Setter Property="Margin" Value="3"/>
             <Setter Property="Cursor" Value="Hand"/>
         </Style>
-        <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+        <Style x:Key="AccentButton" TargetType="Button">
+            <Setter Property="Background" Value="#10304A"/>
+            <Setter Property="Foreground" Value="#E6F2FF"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="12,5"/>
+            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style x:Key="PanicButton" TargetType="Button">
+            <Setter Property="Background" Value="#5A0A0A"/>
+            <Setter Property="Foreground" Value="#FFD6D6"/>
+            <Setter Property="BorderBrush" Value="#B02424"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="14,5"/>
+            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Cursor" Value="Hand"/>
         </Style>
         <Style TargetType="Label">
             <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
         <Style TargetType="CheckBox">
             <Setter Property="Foreground" Value="{StaticResource Text}"/>
             <Setter Property="Margin" Value="3"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="{StaticResource Panel}"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource Text}"/>
+            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Padding" Value="3,2"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
         <Style TargetType="GroupBox">
             <Setter Property="Foreground" Value="{StaticResource Warn}"/>
             <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
             <Setter Property="Margin" Value="6"/>
             <Setter Property="Padding" Value="6"/>
+        </Style>
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="TabBd" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
+                                BorderThickness="1,1,1,0" Margin="0,0,3,0" Padding="16,7" CornerRadius="3,3,0,0">
+                            <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="TabBd" Property="Background" Value="{StaticResource Bg}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Warn}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Application.Resources>
 </Application>

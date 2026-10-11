@@ -1,8 +1,11 @@
-using System.Globalization;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using UfoEncounter.Audio;
 using UfoEncounter.Encounters;
@@ -13,17 +16,35 @@ namespace UfoEncounter;
 
 public partial class MainWindow : Window
 {
+    private const int MaxLogLines = 400;
+
     private SimConnectClient? _sim;
     private ElectricalDisruptor? _disruptor;
     private LightChoreographer? _lights;
     private AudioEngine? _audio;
     private EncounterDirector? _director;
     private Logbook? _logbook;
+    private GlobalHotkeys? _hotkeys;
 
-    private CancellationTokenSource? _effects; // for single-effect test buttons
+    private CancellationTokenSource? _effects;  // single-effect test buttons
+    private CancellationTokenSource? _humCts;   // hum test
     private DispatcherTimer? _reconnect;
+    private DispatcherTimer? _uiTimer;           // countdown + autosave
+    private readonly ObservableCollection<string> _logLines = new();
+    private readonly Stopwatch _uiClock = Stopwatch.StartNew();
+    private long _lastStatusMs = -1000;
+    private bool _todLogged;
+    private int _autosaveTicks;
+    private bool _uiReady;
 
-    public MainWindow() => InitializeComponent();
+    // Which field a pending "Übernehmen" (current aircraft title) should fill.
+    private TextBox? _titleTarget;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        _uiReady = true;
+    }
 
     protected override void OnSourceInitialized(EventArgs e)
     {
@@ -31,6 +52,7 @@ public partial class MainWindow : Window
 
         var hwnd = new WindowInteropHelper(this).Handle;
         HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
+        LogList.ItemsSource = _logLines;
 
         _sim = new SimConnectClient(hwnd);
         _audio = new AudioEngine();
@@ -39,9 +61,9 @@ public partial class MainWindow : Window
         _lights = new LightChoreographer(_sim, Trace);
         _director = new EncounterDirector(_sim, _disruptor, _lights, _audio, _logbook, Trace);
 
-        _sim.Connected += () => { SimStatus.Text = " CONNECTED"; SimStatus.Foreground = (System.Windows.Media.Brush)FindResource("Accent"); };
-        _sim.Disconnected += () => { SimStatus.Text = " DISCONNECTED"; SimStatus.Foreground = (System.Windows.Media.Brush)FindResource("Warn"); };
-        _sim.StateUpdated += s => AglText.Text = $" {s.AltitudeAgl:F0} ft";
+        _sim.Connected += OnSimConnected;
+        _sim.Disconnected += OnSimDisconnected;
+        _sim.StateUpdated += OnPlaneState;
         _sim.Log += Trace;
         _sim.TitleReceived += title =>
         {
@@ -50,18 +72,34 @@ public partial class MainWindow : Window
             _titleTarget = null;
         };
 
-        _director.EncounterStateChanged += (name, active) =>
-            EncounterText.Text = active ? $" ▶ {name}" : " idle";
+        _director.StatusChanged += s => EncounterText.Text = s.Length == 0 ? "Bereit." : "▶ " + s;
+        _director.RandomModeChanged += on => { if (RandomChk.IsChecked != on) RandomChk.IsChecked = on; };
 
         BuildScenarioButtons();
+        BuildPatternCombo();
         LoadSettings();          // apply persisted settings to the controls...
+        UpdateSliderLabels();
         PushSettingsToDirector();// ...and sync them to the director
+        DataPathText.Text = $"Speicherort: {AppPaths.DataDir}";
+        UpdatePackageInfo();
 
-        // Try to attach to a running sim, and keep retrying quietly.
+        _hotkeys = new GlobalHotkeys(hwnd);
+        RegisterHotkey(ModifierKeys.Control | ModifierKeys.Alt, Key.P, "Strg+Alt+P", Panic);
+        RegisterHotkey(ModifierKeys.Control | ModifierKeys.Alt, Key.U, "Strg+Alt+U", () => _ = EncounterNowAsync());
+        RegisterHotkey(ModifierKeys.Control | ModifierKeys.Alt, Key.Z, "Strg+Alt+Z",
+            () => RandomChk.IsChecked = RandomChk.IsChecked != true);
+
+        // Attach to a running sim and keep retrying quietly (MSFS can take minutes to load).
         _reconnect = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        _reconnect.Tick += (_, _) => { if (_sim is { IsConnected: false }) _sim.TryConnect(); };
+        _reconnect.Tick += (_, _) => { if (_sim is { IsConnected: false }) _sim.TryConnect(quiet: true); };
         _reconnect.Start();
-        _sim.TryConnect();
+        _sim.TryConnect(quiet: true);
+
+        _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _uiTimer.Tick += OnUiTick;
+        _uiTimer.Start();
+
+        Trace("UFO Encounter bereit. Tastenkürzel: Strg+Alt+P = PANIK-STOP · Strg+Alt+U = Begegnung jetzt · Strg+Alt+Z = Zufallsmodus.");
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -71,106 +109,314 @@ public partial class MainWindow : Window
             _sim?.HandleWindowMessage();
             handled = true;
         }
+        else if (_hotkeys != null && _hotkeys.Handle(msg, wParam))
+        {
+            handled = true;
+        }
         return IntPtr.Zero;
+    }
+
+    private void RegisterHotkey(ModifierKeys mods, Key key, string name, Action action)
+    {
+        if (_hotkeys != null && !_hotkeys.Register(mods, key, action))
+            Trace($"Tastenkürzel {name} ist von einem anderen Programm belegt – bitte den Button benutzen.");
     }
 
     private void BuildScenarioButtons()
     {
         foreach (var sc in EncounterScenario.Catalog)
         {
-            var btn = new Button
-            {
-                Content = sc.Name,
-                ToolTip = sc.Description,
-                MinWidth = 160,
-            };
+            var btn = new Button { Content = sc.Name, ToolTip = sc.Description, MinWidth = 170 };
             btn.Click += async (_, _) =>
             {
-                if (_director != null) await _director.TriggerAsync(sc);
+                if (_director != null) await _director.TriggerAsync(sc, manual: true);
             };
             ScenarioPanel.Children.Add(btn);
         }
     }
 
+    private static readonly LightPattern[] TestablePatterns =
+    {
+        LightPattern.PopUp, LightPattern.TicTac, LightPattern.Wingman, LightPattern.PaceAhead,
+        LightPattern.Abeam, LightPattern.Above, LightPattern.Below, LightPattern.Formation,
+        LightPattern.Inspect, LightPattern.Orbit, LightPattern.Approach, LightPattern.BrakeHover,
+        LightPattern.FlyBy,
+    };
+
+    private void BuildPatternCombo()
+    {
+        foreach (var p in TestablePatterns)
+            PatternCombo.Items.Add(new ComboBoxItem { Content = PatternNames.German(p), Tag = p });
+        PatternCombo.SelectedIndex = 0;
+    }
+
     // ---- Status / logging ----
 
-    private void Trace(string msg) => Dispatcher.Invoke(() =>
+    private void Trace(string msg)
     {
-        LogText.Text += $"[{DateTime.Now:HH:mm:ss}] {msg}\n";
-        LogScroll.ScrollToEnd();
-    });
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => Trace(msg)); return; }
+        _logLines.Add($"[{DateTime.Now:HH:mm:ss}] {msg}");
+        while (_logLines.Count > MaxLogLines) _logLines.RemoveAt(0);
+        LogList.ScrollIntoView(_logLines[^1]);
+    }
+
+    private static string TodName(double code) => (int)Math.Round(code) switch
+    {
+        0 => "Morgendämmerung",
+        1 => "Tag",
+        2 => "Abenddämmerung",
+        3 => "Nacht",
+        _ => "?",
+    };
+
+    private void OnPlaneState(PlaneState s)
+    {
+        // State arrives every sim frame; the labels only need a few updates per second.
+        long now = _uiClock.ElapsedMilliseconds;
+        if (now - _lastStatusMs < 250) return;
+        _lastStatusMs = now;
+        AglText.Text = $"{s.AltitudeAgl:F0} ft";
+        TodText.Text = TodName(s.TimeOfDay);
+        if (!_todLogged)
+        {
+            _todLogged = true;
+            Trace($"Tageszeit erkannt: {TodName(s.TimeOfDay)} (Code {s.TimeOfDay:0}).");
+        }
+    }
+
+    private void OnSimConnected()
+    {
+        SimStatus.Text = "verbunden";
+        SimStatus.Foreground = (Brush)FindResource("Accent");
+        ConnectBtn.Content = "Verbunden";
+        ConnectBtn.IsEnabled = false;
+        _todLogged = false;
+    }
+
+    private void OnSimDisconnected()
+    {
+        SimStatus.Text = "getrennt – warte auf MSFS …";
+        SimStatus.Foreground = (Brush)FindResource("Warn");
+        ConnectBtn.Content = "Verbinden";
+        ConnectBtn.IsEnabled = true;
+        AglText.Text = "—";
+        TodText.Text = "—";
+    }
+
+    private void OnUiTick(object? sender, EventArgs e)
+    {
+        if (_director is { IsRandomMode: true, NextRandomEncounterUtc: DateTime next })
+        {
+            double s = (next - DateTime.UtcNow).TotalSeconds;
+            NextText.Text = s > 1 ? $"nächste Zufalls-Begegnung in ca. {s:0} s" : "nächste Zufalls-Begegnung gleich";
+        }
+        else NextText.Text = "";
+
+        if (++_autosaveTicks >= 20) { _autosaveTicks = 0; SaveSettings(); }
+    }
 
     // ---- Connection ----
 
     private void ConnectBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (_sim == null) return;
-        if (_sim.IsConnected) _sim.Disconnect();
-        else if (!_sim.TryConnect()) Trace("Sim not running? Will keep retrying.");
+        // Connect only — a manual disconnect mid-blackout would strand the restore.
+        if (_sim is { IsConnected: false }) _sim.TryConnect();
     }
 
-    // ---- Single-effect tests ----
+    // ---- Encounters ----
 
-    private async void TestBlackout_Click(object sender, RoutedEventArgs e) =>
-        await RunEffect(new DisruptionPlan
-        {
-            Kind = DisruptionKind.DeepBlackout,
-            Duration = TimeSpan.FromSeconds(8),
-            CutEngine = _director?.DeepBlackoutCutsEngine ?? true,
-            UseFullShutdown = _director?.FullShutdownForBlackout ?? false,
-        });
-
-    private async void TestStutter_Click(object sender, RoutedEventArgs e) =>
-        await RunEffect(new DisruptionPlan
-        {
-            Kind = DisruptionKind.Stutter,
-            Duration = TimeSpan.FromSeconds(6),
-            StutterStep = TimeSpan.FromMilliseconds(450 - 250 * IntensitySlider.Value),
-        });
-
-    private async Task RunEffect(DisruptionPlan plan)
+    private async Task EncounterNowAsync()
     {
-        if (_disruptor == null || _sim is not { IsConnected: true }) { Trace("Not connected."); return; }
-        _effects = new CancellationTokenSource();
-        try { await _disruptor.RunAsync(plan, _effects.Token); }
+        if (_director != null) await _director.RunRandomEncounterAsync();
+    }
+
+    private async void EncounterNow_Click(object sender, RoutedEventArgs e) => await EncounterNowAsync();
+
+    private void RandomChk_Changed(object sender, RoutedEventArgs e) =>
+        _director?.SetRandomMode(RandomChk.IsChecked == true);
+
+    private async void TestHolyGrail_Click(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) await _director.RunHolyGrailAsync();
+    }
+
+    private async void TestJetChase_Click(object sender, RoutedEventArgs e)
+    {
+        if (_director != null) await _director.RunJetChaseAsync();
+    }
+
+    private async void TestFullEncounter_Click(object sender, RoutedEventArgs e)
+    {
+        if (_director != null)
+            await _director.TriggerAsync(EncounterScenario.ByName("Verfolger (Wingman)"), manual: true, forceMultiPhase: true);
+    }
+
+    private void Panic_Click(object sender, RoutedEventArgs e) => Panic();
+
+    private void Panic()
+    {
+        _effects?.Cancel();
+        _humCts?.Cancel();
+        _director?.PanicStop();
+    }
+
+    // ---- Objects & lights ----
+
+    private void UseCurrentForLight_Click(object sender, RoutedEventArgs e) => RequestTitleInto(LightTitleBox);
+    private void UseCurrentForMothership_Click(object sender, RoutedEventArgs e) => RequestTitleInto(MothershipTitleBox);
+    private void UseCurrentForBeam_Click(object sender, RoutedEventArgs e) => RequestTitleInto(BeamTitleBox);
+    private void UseCurrentForJet_Click(object sender, RoutedEventArgs e) => RequestTitleInto(JetTitleBox);
+
+    private void RequestTitleInto(TextBox target)
+    {
+        if (_sim is not { IsConnected: true }) { Trace("Keine Verbindung – der Titel kann nicht gelesen werden."); return; }
+        _titleTarget = target;
+        _sim.RequestAircraftTitle();
+    }
+
+    private static double TestDuration(LightPattern p) => p switch
+    {
+        LightPattern.Inspect or LightPattern.Orbit => 24,
+        LightPattern.Approach or LightPattern.FlyBy => 12,
+        LightPattern.BrakeHover => 10,
+        _ => 14,
+    };
+
+    private void TestPattern_Click(object sender, RoutedEventArgs e)
+    {
+        if (PatternCombo.SelectedItem is ComboBoxItem { Tag: LightPattern p })
+            _director?.TestLights(p, TestDuration(p));
+    }
+
+    private void TestMothership_Click(object sender, RoutedEventArgs e) =>
+        _director?.TestLights(LightPattern.Mothership, 20, mothership: true);
+
+    private void UpdatePackageInfo()
+    {
+        string? community = LightPackageGenerator.DetectCommunityFolder();
+        if (community == null)
+        {
+            PackageInfo.Text = "Community-Ordner nicht automatisch gefunden – beim Erzeugen wirst du danach gefragt.";
+            return;
+        }
+        string pkg = Path.Combine(community, LightPackageGenerator.PackageFolderName);
+        PackageInfo.Text = Directory.Exists(pkg)
+            ? $"Installiert: {pkg}"
+            : $"Noch nicht erzeugt. Ziel: {community}";
+    }
+
+    private void GeneratePackage_Click(object sender, RoutedEventArgs e)
+    {
+        string? community = LightPackageGenerator.DetectCommunityFolder();
+        if (community == null)
+        {
+            var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "Community-Ordner von MSFS 2024 auswählen" };
+            if (dlg.ShowDialog(this) != true) return;
+            community = dlg.FolderName;
+        }
+        try
+        {
+            var r = LightPackageGenerator.Generate(community);
+            UpdatePackageInfo();
+            Trace($"Licht-Paket erzeugt: {r.PackagePath} ({r.LightTitles.Count} Lichter, {r.OrbTitles.Count} Kugeln).");
+            var answer = MessageBox.Show(this,
+                "Das Licht-Paket wurde erzeugt:\n" + r.PackagePath +
+                "\n\nWICHTIG: MSFS jetzt neu starten – Pakete werden nur beim Start geladen.\n\n" +
+                "Soll der Titel für „Lichter / kleine UFOs“ auf die neuen Lichtobjekte gesetzt werden?\n" +
+                "(alle Farben, ruhig / pulsierend / blitzend – jedes Objekt zufällig gemischt)",
+                "Licht-Paket erzeugt", MessageBoxButton.YesNo, MessageBoxImage.Information);
+            if (answer == MessageBoxResult.Yes) LightTitleBox.Text = string.Join(", ", r.LightTitles);
+            Trace("Test nach dem MSFS-Neustart: Tab „Objekte & Lichter“ → Muster testen (nachts sieht man es am besten). "
+                  + $"Erscheint nichts, einzeln probieren: „{r.OrbTitles[0]}“ (leuchtende Kugel) und „{r.DiagnosticTitles[0]}“ (älteres Lichtformat).");
+        }
+        catch (Exception ex)
+        {
+            Trace($"Licht-Paket konnte nicht erzeugt werden: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "Licht-Paket", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    // ---- Electrical & sound tests ----
+
+    private async void TestBlackout_Click(object sender, RoutedEventArgs e) => await RunEffect(DisruptionKind.DeepBlackout);
+    private async void TestStutter_Click(object sender, RoutedEventArgs e) => await RunEffect(DisruptionKind.Stutter);
+    private async void TestStutterToBlackout_Click(object sender, RoutedEventArgs e) => await RunEffect(DisruptionKind.StutterToBlackout);
+
+    private async Task RunEffect(DisruptionKind kind)
+    {
+        if (_disruptor == null || _director == null || _sim is not { IsConnected: true }) { Trace("Keine Verbindung zum Sim."); return; }
+        if (_disruptor.IsActive) { Trace("Es läuft bereits ein Ausfall."); return; }
+        _effects?.Dispose();
+        var cts = _effects = new CancellationTokenSource();
+        try { await _disruptor.RunAsync(_director.TestPlan(kind), cts.Token); }
         catch (OperationCanceledException) { }
     }
-
-    private async void TestStutterToBlackout_Click(object sender, RoutedEventArgs e) =>
-        await RunEffect(new DisruptionPlan
-        {
-            Kind = DisruptionKind.StutterToBlackout,
-            Duration = TimeSpan.FromSeconds(4),          // stutter phase
-            BlackoutDuration = TimeSpan.FromSeconds(8),  // blackout phase
-            EscalateChance = 1.0,                        // force the transition for the test
-            CutEngine = _director?.DeepBlackoutCutsEngine ?? true,
-            UseFullShutdown = _director?.FullShutdownForBlackout ?? false,
-            StutterStep = TimeSpan.FromMilliseconds(450 - 250 * IntensitySlider.Value),
-        });
 
     private async void TestHum_Click(object sender, RoutedEventArgs e)
     {
-        if (_audio == null) return;
-        _effects = new CancellationTokenSource();
+        if (_audio == null || _director == null) return;
+        if (_director.IsEncounterActive) { Trace("Während einer Begegnung nicht möglich."); return; }
+        _humCts?.Cancel();
+        var cts = _humCts = new CancellationTokenSource();
         _audio.StartHum(IntensitySlider.Value);
-        Trace("Hum test (6s).");
-        try { await Task.Delay(TimeSpan.FromSeconds(6), _effects.Token); }
+        Trace("Summen-Test (6 s).");
+        try { await Task.Delay(TimeSpan.FromSeconds(6), cts.Token); }
         catch (OperationCanceledException) { }
-        finally { _audio.Stop(); }
-    }
-
-    private void Panic_Click(object sender, RoutedEventArgs e)
-    {
-        _effects?.Cancel();
-        _director?.PanicStop();
-        if (RandomChk.IsChecked == true) RandomChk.IsChecked = false;
+        finally
+        {
+            if (_humCts == cts && !_director.IsEncounterActive) _audio.Stop();
+        }
     }
 
     // ---- Settings ----
 
+    private void Slider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_uiReady) return;
+        UpdateSliderLabels();
+        PushSettingsToDirector();
+    }
+
+    private void Setting_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_uiReady) PushSettingsToDirector();
+    }
+
+    private void Setting_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_uiReady) PushSettingsToDirector();
+    }
+
+    private void ElecMode_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_uiReady) PushSettingsToDirector();
+    }
+
+    private static string Pct(double v) => $"{v * 100:0} %";
+
+    private void UpdateSliderLabels()
+    {
+        FreqVal.Text = $"{FreqSlider.Value:0.0}";
+        LightCountVal.Text = $"{(int)LightCountSlider.Value}";
+        MinDistVal.Text = MinDistSlider.Value < 1 ? "aus" : $"{MinDistSlider.Value:0} m";
+        SpeedVal.Text = $"{SpeedSlider.Value:0.00}×";
+        BeamCountVal.Text = $"{(int)BeamCountSlider.Value}";
+        BeamHeightVal.Text = $"{BeamHeightSlider.Value:0} m";
+        DisruptChanceVal.Text = Pct(DisruptChanceSlider.Value);
+        BlackMinVal.Text = $"{BlackMinSlider.Value:0} s";
+        BlackMaxVal.Text = $"{BlackMaxSlider.Value:0} s";
+        IntensityVal.Text = Pct(IntensitySlider.Value);
+        WhooshVolVal.Text = Pct(WhooshVolSlider.Value);
+        MinDurVal.Text = $"{MinDurSlider.Value:0} s";
+        MaxDurVal.Text = $"{MaxDurSlider.Value:0} s";
+        DreadVal.Text = Pct(DreadSlider.Value);
+        AglVal.Text = $"{AglSlider.Value:0} ft";
+    }
+
     private void PushSettingsToDirector()
     {
-        if (_director == null) return;
+        Topmost = TopmostChk.IsChecked == true;
+        if (_director == null || _lights == null) return;
         _director.FrequencyPerMin = FreqSlider.Value;
         _director.MinDurationSec = MinDurSlider.Value;
         _director.MaxDurationSec = MaxDurSlider.Value;
@@ -185,223 +431,44 @@ public partial class MainWindow : Window
         _director.WhooshEnabled = WhooshChk.IsChecked == true;
         _director.WhooshVolume = WhooshVolSlider.Value;
         _director.DisruptionChance = DisruptChanceSlider.Value;
-        _director.DeepBlackoutCutsEngine = EngineCutChk.IsChecked == true;
-        _director.FullShutdownForBlackout = FullShutdownChk.IsChecked == true;
+        _director.Mode = (ElectricalMode)Math.Clamp(ElecModeCombo.SelectedIndex, 0, 2);
         _director.LightsEnabled = LightsChk.IsChecked == true;
         _director.LightObjectTitle = LightTitleBox.Text;
         _director.MothershipTitle = MothershipTitleBox.Text;
         _director.LightCount = (int)LightCountSlider.Value;
-        _director.SpawnAsAircraft = AircraftChk.IsChecked == true;
+        _director.SpeedScale = SpeedSlider.Value;
+        _director.MinDistanceMeters = MinDistSlider.Value;
         _director.BeamTitle = BeamTitleBox.Text;
         _director.BeamCount = (int)BeamCountSlider.Value;
         _director.BeamHeight = BeamHeightSlider.Value;
         _director.JetTitle = JetTitleBox.Text;
-        if (_lights != null)
-        {
-            _lights.MinDistanceMeters = MinDistSlider.Value;
-            _lights.SpeedScale = SpeedSlider.Value;
-        }
+        _lights.ForceAircraftLights = AircraftLightsChk.IsChecked == true;
     }
 
-    // Which field a pending "use current aircraft" request should fill.
-    private TextBox? _titleTarget;
-
-    private void UseCurrentForLight_Click(object sender, RoutedEventArgs e) => RequestTitleInto(LightTitleBox);
-    private void UseCurrentForMothership_Click(object sender, RoutedEventArgs e) => RequestTitleInto(MothershipTitleBox);
-
-    private void RequestTitleInto(TextBox target)
+    private void ApplyPreset(double freq, double minDur, double maxDur, double intensity, double dread,
+        double disrupt, int count, double minDist, double speed)
     {
-        if (_sim is not { IsConnected: true }) { Trace("Not connected — can't read aircraft title."); return; }
-        _titleTarget = target;
-        _sim.RequestAircraftTitle();
+        FreqSlider.Value = freq;
+        MinDurSlider.Value = minDur;
+        MaxDurSlider.Value = maxDur;
+        IntensitySlider.Value = intensity;
+        DreadSlider.Value = dread;
+        DisruptChanceSlider.Value = disrupt;
+        LightCountSlider.Value = count;
+        MinDistSlider.Value = minDist;
+        SpeedSlider.Value = speed;
+        MultiPhaseChk.IsChecked = true;
+        Trace("Voreinstellung übernommen.");
     }
 
-    private void MothershipTitle_Changed(object sender, TextChangedEventArgs e)
-    {
-        if (_director != null) _director.MothershipTitle = MothershipTitleBox.Text;
-    }
-
-    private void TestMothership_Click(object sender, RoutedEventArgs e) =>
-        _director?.TestLights(LightPattern.Mothership, 20, mothership: true);
-
-    private void UseCurrentForBeam_Click(object sender, RoutedEventArgs e) => RequestTitleInto(BeamTitleBox);
-
-    private void BeamTitle_Changed(object sender, TextChangedEventArgs e)
-    {
-        if (_director != null) _director.BeamTitle = BeamTitleBox.Text;
-    }
-
-    private void BeamCount_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (BeamCountVal != null) BeamCountVal.Text = ((int)BeamCountSlider.Value).ToString();
-        if (_director != null) _director.BeamCount = (int)BeamCountSlider.Value;
-    }
-
-    private void BeamHeight_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (BeamHeightVal != null) BeamHeightVal.Text = BeamHeightSlider.Value.ToString("0", CultureInfo.InvariantCulture);
-        if (_director != null) _director.BeamHeight = BeamHeightSlider.Value;
-    }
-
-    private async void TestHolyGrail_Click(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) await _director.RunHolyGrailAsync();
-    }
-
-    private void UseCurrentForJet_Click(object sender, RoutedEventArgs e) => RequestTitleInto(JetTitleBox);
-
-    private void JetTitle_Changed(object sender, TextChangedEventArgs e)
-    {
-        if (_director != null) _director.JetTitle = JetTitleBox.Text;
-    }
-
-    private async void TestJetChase_Click(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) await _director.RunJetChaseAsync();
-    }
-
-    private void BlackSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (BlackMinVal != null) BlackMinVal.Text = BlackMinSlider.Value.ToString("0", CultureInfo.InvariantCulture);
-        if (BlackMaxVal != null) BlackMaxVal.Text = BlackMaxSlider.Value.ToString("0", CultureInfo.InvariantCulture);
-        if (_director == null) return;
-        _director.BlackoutMinSec = BlackMinSlider.Value;
-        _director.BlackoutMaxSec = BlackMaxSlider.Value;
-    }
-
-    private void Lights_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) _director.LightsEnabled = LightsChk.IsChecked == true;
-    }
-
-    private void Aircraft_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) _director.SpawnAsAircraft = AircraftChk.IsChecked == true;
-    }
-
-    private void MinDist_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (MinDistVal != null) MinDistVal.Text = MinDistSlider.Value.ToString("0", CultureInfo.InvariantCulture);
-        if (_lights != null) _lights.MinDistanceMeters = MinDistSlider.Value;
-    }
-
-    private void Speed_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (SpeedVal != null) SpeedVal.Text = SpeedSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
-        if (_lights != null) _lights.SpeedScale = SpeedSlider.Value;
-    }
-
-    private void LightTitle_Changed(object sender, TextChangedEventArgs e)
-    {
-        if (_director != null) _director.LightObjectTitle = LightTitleBox.Text;
-    }
-
-    private void LightCount_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (LightCountVal != null) LightCountVal.Text = ((int)LightCountSlider.Value).ToString();
-        if (_director != null) _director.LightCount = (int)LightCountSlider.Value;
-    }
-
-    private void TestLightTicTac_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.TicTac, 12);
-    private void TestLightWingman_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.Wingman, 12);
-    private void TestLightPopup_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.PopUp, 12);
-    private void TestLightPaceAhead_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.PaceAhead, 14);
-    private void TestLightAbeam_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.Abeam, 14);
-    private void TestLightInspect_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.Inspect, 24);
-    private void TestLightBrake_Click(object sender, RoutedEventArgs e) => _director?.TestLights(LightPattern.BrakeHover, 10);
-
-    private void RandomChk_Changed(object sender, RoutedEventArgs e) =>
-        _director?.SetRandomMode(RandomChk.IsChecked == true);
-
-    private void Realism_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) _director.RealismLock = RealismChk.IsChecked == true;
-    }
-
-    private void MultiPhase_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) _director.MultiPhase = MultiPhaseChk.IsChecked == true;
-    }
-
-    private void DayNight_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) _director.DayNightBias = DayNightChk.IsChecked == true;
-    }
-
-    private void Whoosh_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) _director.WhooshEnabled = WhooshChk.IsChecked == true;
-    }
-
-    private void WhooshVol_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (WhooshVolVal != null) WhooshVolVal.Text = WhooshVolSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
-        if (_director != null) _director.WhooshVolume = WhooshVolSlider.Value;
-    }
-
-    private void EngineCut_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) _director.DeepBlackoutCutsEngine = EngineCutChk.IsChecked == true;
-    }
-
-    private void FullShutdown_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_director != null) _director.FullShutdownForBlackout = FullShutdownChk.IsChecked == true;
-    }
-
-    private void DisruptChance_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (DisruptChanceVal != null) DisruptChanceVal.Text = DisruptChanceSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
-        if (_director != null) _director.DisruptionChance = DisruptChanceSlider.Value;
-    }
-
-    private void DreadSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (DreadVal != null) DreadVal.Text = DreadSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
-        if (_director != null) _director.Dread = DreadSlider.Value;
-    }
-
-    private async void TestFullEncounter_Click(object sender, RoutedEventArgs e)
-    {
-        if (_director == null) return;
-        // Force a multi-phase run for the test regardless of the toggle.
-        bool prev = _director.MultiPhase;
-        _director.MultiPhase = true;
-        try { await _director.TriggerAsync(EncounterScenario.ByName("Verfolger (Wingman)")); }
-        finally { _director.MultiPhase = prev; }
-    }
-
-    private void FreqSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (FreqVal != null) FreqVal.Text = FreqSlider.Value.ToString("0.0", CultureInfo.InvariantCulture);
-        if (_director != null) _director.FrequencyPerMin = FreqSlider.Value;
-    }
-
-    private void DurSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (MinDurVal != null) MinDurVal.Text = MinDurSlider.Value.ToString("0", CultureInfo.InvariantCulture);
-        if (MaxDurVal != null) MaxDurVal.Text = MaxDurSlider.Value.ToString("0", CultureInfo.InvariantCulture);
-        if (_director == null) return;
-        _director.MinDurationSec = MinDurSlider.Value;
-        _director.MaxDurationSec = MaxDurSlider.Value;
-    }
-
-    private void IntensitySlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (IntensityVal != null) IntensityVal.Text = IntensitySlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
-        if (_director != null) _director.Intensity = IntensitySlider.Value;
-    }
-
-    private void AglSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (AglVal != null) AglVal.Text = AglSlider.Value.ToString("0", CultureInfo.InvariantCulture);
-        if (_director != null) _director.MinAglFeet = AglSlider.Value;
-    }
+    private void PresetGentle_Click(object sender, RoutedEventArgs e) => ApplyPreset(0.5, 6, 14, 0.45, 0.2, 0.3, 2, 400, 0.5);
+    private void PresetStandard_Click(object sender, RoutedEventArgs e) => ApplyPreset(1.0, 4, 12, 0.6, 0.4, 0.75, 2, 200, 0.6);
+    private void PresetMax_Click(object sender, RoutedEventArgs e) => ApplyPreset(2.0, 6, 20, 0.85, 0.85, 0.9, 4, 120, 0.75);
 
     private void ApplySeed_Click(object sender, RoutedEventArgs e)
     {
         if (int.TryParse(SeedBox.Text, out var seed)) _director?.SetSeed(seed);
-        else Trace("Seed must be an integer.");
+        else Trace("Der Seed muss eine ganze Zahl sein.");
     }
 
     private void RandomSeed_Click(object sender, RoutedEventArgs e)
@@ -410,10 +477,10 @@ public partial class MainWindow : Window
         _director?.SetSeed(null);
     }
 
-    private void ExportLog_Click(object sender, RoutedEventArgs e)
+    private void OpenDataFolder_Click(object sender, RoutedEventArgs e)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "sightings.csv");
-        Trace(File.Exists(path) ? $"Sightings: {path}" : "No sightings recorded yet.");
+        try { Process.Start(new ProcessStartInfo("explorer.exe", $"\"{AppPaths.DataDir}\"") { UseShellExecute = true }); }
+        catch (Exception ex) { Trace($"Ordner konnte nicht geöffnet werden: {ex.Message}"); }
     }
 
     // ---- Settings persistence ----
@@ -432,62 +499,97 @@ public partial class MainWindow : Window
         WhooshVolSlider.Value = s.WhooshVolume;
         DisruptChanceSlider.Value = s.DisruptionChance;
         LightCountSlider.Value = s.LightCount;
+        MinDistSlider.Value = s.MinDistance;
+        SpeedSlider.Value = s.SpeedScale;
+        BeamCountSlider.Value = s.BeamCount;
+        BeamHeightSlider.Value = s.BeamHeight;
 
         MultiPhaseChk.IsChecked = s.MultiPhase;
         DayNightChk.IsChecked = s.DayNight;
         WhooshChk.IsChecked = s.Whoosh;
-        EngineCutChk.IsChecked = s.EngineCut;
-        FullShutdownChk.IsChecked = s.FullShutdown;
         RealismChk.IsChecked = s.Realism;
         LightsChk.IsChecked = s.LightsEnabled;
-        AircraftChk.IsChecked = s.SpawnAsAircraft;
+        AircraftLightsChk.IsChecked = s.AircraftLights;
+        TopmostChk.IsChecked = s.Topmost;
+        ElecModeCombo.SelectedIndex = s.ElecMode >= 0 ? Math.Min(s.ElecMode, 2) : (s.FullShutdown ? 2 : s.EngineCut ? 1 : 0);
 
         LightTitleBox.Text = s.LightTitle;
         MothershipTitleBox.Text = s.MothershipTitle;
-        MinDistSlider.Value = s.MinDistance;
-        SpeedSlider.Value = s.SpeedScale;
         BeamTitleBox.Text = s.BeamTitle;
-        BeamCountSlider.Value = s.BeamCount;
-        BeamHeightSlider.Value = s.BeamHeight;
         JetTitleBox.Text = s.JetTitle;
+
+        Tabs.SelectedIndex = Math.Clamp(s.SelectedTab, 0, Tabs.Items.Count - 1);
+        RestoreWindowPlacement(s);
     }
 
-    private void SaveSettings() => SettingsStore.Save(new AppSettings
+    private void RestoreWindowPlacement(AppSettings s)
     {
-        Frequency = FreqSlider.Value,
-        MinDuration = MinDurSlider.Value,
-        MaxDuration = MaxDurSlider.Value,
-        Intensity = IntensitySlider.Value,
-        MinAgl = AglSlider.Value,
-        BlackoutMin = BlackMinSlider.Value,
-        BlackoutMax = BlackMaxSlider.Value,
-        Dread = DreadSlider.Value,
-        WhooshVolume = WhooshVolSlider.Value,
-        DisruptionChance = DisruptChanceSlider.Value,
-        LightCount = (int)LightCountSlider.Value,
-        MultiPhase = MultiPhaseChk.IsChecked == true,
-        DayNight = DayNightChk.IsChecked == true,
-        Whoosh = WhooshChk.IsChecked == true,
-        EngineCut = EngineCutChk.IsChecked == true,
-        FullShutdown = FullShutdownChk.IsChecked == true,
-        Realism = RealismChk.IsChecked == true,
-        LightsEnabled = LightsChk.IsChecked == true,
-        SpawnAsAircraft = AircraftChk.IsChecked == true,
-        LightTitle = LightTitleBox.Text,
-        MothershipTitle = MothershipTitleBox.Text,
-        MinDistance = MinDistSlider.Value,
-        SpeedScale = SpeedSlider.Value,
-        BeamTitle = BeamTitleBox.Text,
-        BeamCount = (int)BeamCountSlider.Value,
-        BeamHeight = BeamHeightSlider.Value,
-        JetTitle = JetTitleBox.Text,
-    });
+        if (s.WindowWidth is double w && s.WindowHeight is double h && w >= MinWidth && h >= MinHeight)
+        {
+            Width = w;
+            Height = h;
+        }
+        if (s.WindowLeft is double left && s.WindowTop is double top &&
+            left >= SystemParameters.VirtualScreenLeft - 50 && top >= SystemParameters.VirtualScreenTop - 50 &&
+            left + 200 <= SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth &&
+            top + 100 <= SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight)
+        {
+            Left = left;
+            Top = top;
+        }
+    }
+
+    private void SaveSettings()
+    {
+        var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+        SettingsStore.Save(new AppSettings
+        {
+            Frequency = FreqSlider.Value,
+            MinDuration = MinDurSlider.Value,
+            MaxDuration = MaxDurSlider.Value,
+            Intensity = IntensitySlider.Value,
+            MinAgl = AglSlider.Value,
+            BlackoutMin = BlackMinSlider.Value,
+            BlackoutMax = BlackMaxSlider.Value,
+            Dread = DreadSlider.Value,
+            WhooshVolume = WhooshVolSlider.Value,
+            DisruptionChance = DisruptChanceSlider.Value,
+            LightCount = (int)LightCountSlider.Value,
+            MinDistance = MinDistSlider.Value,
+            SpeedScale = SpeedSlider.Value,
+            BeamCount = (int)BeamCountSlider.Value,
+            BeamHeight = BeamHeightSlider.Value,
+            MultiPhase = MultiPhaseChk.IsChecked == true,
+            DayNight = DayNightChk.IsChecked == true,
+            Whoosh = WhooshChk.IsChecked == true,
+            Realism = RealismChk.IsChecked == true,
+            LightsEnabled = LightsChk.IsChecked == true,
+            AircraftLights = AircraftLightsChk.IsChecked == true,
+            Topmost = TopmostChk.IsChecked == true,
+            ElecMode = Math.Clamp(ElecModeCombo.SelectedIndex, 0, 2),
+            LightTitle = LightTitleBox.Text,
+            MothershipTitle = MothershipTitleBox.Text,
+            BeamTitle = BeamTitleBox.Text,
+            JetTitle = JetTitleBox.Text,
+            SelectedTab = Tabs.SelectedIndex,
+            WindowLeft = bounds.IsEmpty ? null : bounds.Left,
+            WindowTop = bounds.IsEmpty ? null : bounds.Top,
+            WindowWidth = bounds.IsEmpty ? null : bounds.Width,
+            WindowHeight = bounds.IsEmpty ? null : bounds.Height,
+        });
+    }
 
     protected override void OnClosed(EventArgs e)
     {
+        _reconnect?.Stop();
+        _uiTimer?.Stop();
+        _effects?.Cancel();
+        _humCts?.Cancel();
         SaveSettings();
-        // Failsafe on exit: stop everything and restore power.
+        // Failsafe on exit: PanicStop restores power/engine synchronously,
+        // i.e. while SimConnect is still open.
         _director?.PanicStop();
+        _hotkeys?.Dispose();
         _audio?.Dispose();
         _sim?.Dispose();
         base.OnClosed(e);

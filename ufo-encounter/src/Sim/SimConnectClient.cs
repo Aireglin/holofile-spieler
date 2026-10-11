@@ -4,7 +4,7 @@ using Microsoft.FlightSimulator.SimConnect;
 namespace UfoEncounter.Sim;
 
 /// <summary>
-/// Snapshot of the player aircraft, refreshed roughly once per second.
+/// Snapshot of the player aircraft, refreshed every sim frame.
 /// Bool SimVars come across the wire as FLOAT64 (0 / 1).
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -19,13 +19,11 @@ public struct PlaneState
     public double MasterBattery;    // ELECTRICAL MASTER BATTERY (bool)
     public double MasterAlternator; // GENERAL ENG MASTER ALTERNATOR:1 (bool)
     public double HeadingTrue;      // PLANE HEADING DEGREES TRUE (degrees)
-    public double TimeOfDay;        // TIME OF DAY (enum: 1=dawn 2=day 3=dusk 4=night)
+    public double TimeOfDay;        // TIME OF DAY (enum: 0=dawn 1=day 2=dusk 3=night)
 }
 
-/// <summary>
-/// Position/attitude written to a spawned light SimObject. Field order MUST
-/// match the MoveObject data definition.
-/// </summary>
+/// <summary>Position/attitude written to a spawned object. Field order MUST match
+/// the ObjectPose data definition.</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct ObjectPose
 {
@@ -35,9 +33,17 @@ public struct ObjectPose
     public double Pitch;      // degrees
     public double Bank;       // degrees
     public double Heading;    // degrees true
-    public double Vx;         // VELOCITY BODY X (ft/s) — kept 0 to stop drift
-    public double Vy;         // VELOCITY BODY Y (ft/s)
-    public double Vz;         // VELOCITY BODY Z (ft/s)
+}
+
+/// <summary>VELOCITY BODY X/Y/Z (ft/s), kept at 0 so frozen aircraft don't drift.
+/// A separate definition, because plain SimObjects may reject velocity writes —
+/// that must never block the position update.</summary>
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct ObjectVelocity
+{
+    public double X;
+    public double Y;
+    public double Z;
 }
 
 /// <summary>Holds a single string SimVar (e.g. TITLE).</summary>
@@ -57,8 +63,12 @@ public sealed class SimConnectClient : IDisposable
 {
     public const uint WM_USER_SIMCONNECT = 0x0402;
 
-    private enum DEFINITION { PlaneState, MoveObject, Title }
-    private enum REQUEST : uint { PlaneState = 0, Title = 1, LightBase = 1000, LightRemoveBase = 2000, ReleaseBase = 3000 }
+    /// <summary>Spawn slots per request-id range. Every spawn gets a fresh slot, so a
+    /// late assignment can never be mistaken for a newer object.</summary>
+    public const uint SpawnSlots = 0x1000;
+
+    private enum DEFINITION { PlaneState, ObjectPose, ObjectVelocity, Title }
+    private enum REQUEST : uint { PlaneState = 0, Title = 1, SpawnBase = 0x1000, RemoveBase = 0x2000, ReleaseBase = 0x3000 }
     private enum GROUP { Priority }
 
     // Events we transmit to the user aircraft or to spawned objects.
@@ -71,33 +81,46 @@ public sealed class SimConnectClient : IDisposable
         TOGGLE_ALTERNATOR4,
         TOGGLE_MASTER_ALTERNATOR,
         TOGGLE_AVIONICS_MASTER,
-        // Engine kill / restart (used by the deep blackout's optional engine cut).
+        // Engine kill / restart (deep blackout).
         ENGINE_AUTO_SHUTDOWN,
         ENGINE_AUTO_START,
         // Freeze a spawned object so the sim's physics leaves our writes alone.
         FREEZE_LATITUDE_LONGITUDE_SET,
         FREEZE_ALTITUDE_SET,
         FREEZE_ATTITUDE_SET,
+        // Exterior lights of spawned aircraft (sent to the object id).
+        NAV_LIGHTS_SET,
+        STROBES_SET,
+        BEACON_LIGHTS_SET,
+        LOGO_LIGHTS_SET,
     }
+
+    private static readonly object ZeroVelocityBoxed = new ObjectVelocity();
 
     private SimConnect? _sim;
     private readonly IntPtr _hwnd;
+    private readonly Dictionary<uint, int> _exceptionCounts = new();
 
     public bool IsConnected => _sim != null;
     public PlaneState State { get; private set; }
 
     public event Action? Connected;
     public event Action? Disconnected;
+    /// <summary>Raised when MSFS itself reports it is closing (before Disconnected).</summary>
+    public event Action? SimQuit;
+    /// <summary>Raised every sim frame with the fresh player state.</summary>
     public event Action<PlaneState>? StateUpdated;
     public event Action<string>? Log;
-    /// <summary>Raised when a spawn request returns its object id (requestId, objectId).</summary>
+    /// <summary>A spawn returned its object id: (slot, objectId).</summary>
     public event Action<uint, uint>? ObjectAssigned;
     /// <summary>Raised with the user aircraft's exact SimObject title after RequestAircraftTitle().</summary>
     public event Action<string>? TitleReceived;
 
     public SimConnectClient(IntPtr hwnd) => _hwnd = hwnd;
 
-    public bool TryConnect()
+    /// <summary>Open the connection. <paramref name="quiet"/> suppresses the failure
+    /// message (used by the background retry while MSFS is still loading).</summary>
+    public bool TryConnect(bool quiet = false)
     {
         if (_sim != null) return true;
         try
@@ -116,7 +139,7 @@ public sealed class SimConnectClient : IDisposable
         }
         catch (COMException ex)
         {
-            Log?.Invoke($"Connect failed: {ex.Message}");
+            if (!quiet) Log?.Invoke($"Keine Verbindung zu MSFS ({ex.Message}). Läuft der Sim und ist ein Flug geladen?");
             _sim = null;
             return false;
         }
@@ -140,21 +163,26 @@ public sealed class SimConnectClient : IDisposable
         Read("TIME OF DAY", "enum");
         _sim!.RegisterDataDefineStruct<PlaneState>(DEFINITION.PlaneState);
 
-        // Settable position/attitude for moving spawned light objects.
-        void Move(string name, string unit) =>
-            _sim!.AddToDataDefinition(DEFINITION.MoveObject, name, unit,
+        void Pose(string name, string unit) =>
+            _sim!.AddToDataDefinition(DEFINITION.ObjectPose, name, unit,
                 SIMCONNECT_DATATYPE.FLOAT64, 0.0f, SimConnect.SIMCONNECT_UNUSED);
 
-        Move("PLANE LATITUDE", "degrees");
-        Move("PLANE LONGITUDE", "degrees");
-        Move("PLANE ALTITUDE", "feet");
-        Move("PLANE PITCH DEGREES", "degrees");
-        Move("PLANE BANK DEGREES", "degrees");
-        Move("PLANE HEADING DEGREES TRUE", "degrees");
-        Move("VELOCITY BODY X", "feet per second");
-        Move("VELOCITY BODY Y", "feet per second");
-        Move("VELOCITY BODY Z", "feet per second");
-        _sim!.RegisterDataDefineStruct<ObjectPose>(DEFINITION.MoveObject);
+        Pose("PLANE LATITUDE", "degrees");
+        Pose("PLANE LONGITUDE", "degrees");
+        Pose("PLANE ALTITUDE", "feet");
+        Pose("PLANE PITCH DEGREES", "degrees");
+        Pose("PLANE BANK DEGREES", "degrees");
+        Pose("PLANE HEADING DEGREES TRUE", "degrees");
+        _sim!.RegisterDataDefineStruct<ObjectPose>(DEFINITION.ObjectPose);
+
+        void Vel(string name) =>
+            _sim!.AddToDataDefinition(DEFINITION.ObjectVelocity, name, "feet per second",
+                SIMCONNECT_DATATYPE.FLOAT64, 0.0f, SimConnect.SIMCONNECT_UNUSED);
+
+        Vel("VELOCITY BODY X");
+        Vel("VELOCITY BODY Y");
+        Vel("VELOCITY BODY Z");
+        _sim!.RegisterDataDefineStruct<ObjectVelocity>(DEFINITION.ObjectVelocity);
 
         // TITLE is a string SimVar (no unit) — used to auto-detect the loaded aircraft.
         _sim!.AddToDataDefinition(DEFINITION.Title, "TITLE", null,
@@ -193,16 +221,16 @@ public sealed class SimConnectClient : IDisposable
         }
         catch (COMException ex)
         {
-            Log?.Invoke($"Transmit {e} failed: {ex.Message}");
+            Log?.Invoke($"Event {e} fehlgeschlagen: {ex.Message}");
         }
     }
 
-    // ---- Light SimObjects ----
+    // ---- Spawned objects ----
 
-    /// <summary>Spawn a SimObject. <paramref name="lightIndex"/> keys the request
-    /// id so the assigned object id can be matched back. Set <paramref name="asAircraft"/>
-    /// for objects that are aircraft (uses AICreateNonATCAircraft).</summary>
-    public void SpawnLight(string title, ObjectPose pose, uint lightIndex, bool asAircraft)
+    /// <summary>Spawn a SimObject in <paramref name="slot"/> (0..SpawnSlots-1). Aircraft
+    /// titles must use AICreateNonATCAircraft; AICreateSimulatedObject is only for
+    /// real SimpleObjects (with aircraft titles it can freeze MSFS 2024).</summary>
+    public void SpawnObject(string title, ObjectPose pose, uint slot, bool asAircraft)
     {
         if (_sim == null) return;
         var init = new SIMCONNECT_DATA_INITPOSITION
@@ -216,27 +244,38 @@ public sealed class SimConnectClient : IDisposable
             OnGround = 0,
             Airspeed = 0,
         };
-        var req = (REQUEST)((uint)REQUEST.LightBase + lightIndex);
+        var req = (REQUEST)((uint)REQUEST.SpawnBase + slot % SpawnSlots);
         try
         {
             if (asAircraft)
-                _sim.AICreateNonATCAircraft(title, $"UFO{lightIndex}", init, req);
+                _sim.AICreateNonATCAircraft(title, $"UFO{slot % 1000}", init, req);
             else
                 _sim.AICreateSimulatedObject(title, init, req);
         }
         catch (COMException ex)
         {
-            Log?.Invoke($"Spawn '{title}' failed: {ex.Message}");
+            Log?.Invoke($"Objekt „{title}“ konnte nicht erzeugt werden: {ex.Message}");
         }
     }
 
-    public void MoveLight(uint objectId, ObjectPose pose)
+    public void MoveObject(uint objectId, ObjectPose pose)
     {
         if (_sim == null) return;
         try
         {
-            _sim.SetDataOnSimObject(DEFINITION.MoveObject, objectId,
+            _sim.SetDataOnSimObject(DEFINITION.ObjectPose, objectId,
                 SIMCONNECT_DATA_SET_FLAG.DEFAULT, pose);
+        }
+        catch (COMException) { /* object may have just been removed */ }
+    }
+
+    public void ZeroVelocity(uint objectId)
+    {
+        if (_sim == null) return;
+        try
+        {
+            _sim.SetDataOnSimObject(DEFINITION.ObjectVelocity, objectId,
+                SIMCONNECT_DATA_SET_FLAG.DEFAULT, ZeroVelocityBoxed);
         }
         catch (COMException) { /* object may have just been removed */ }
     }
@@ -244,28 +283,39 @@ public sealed class SimConnectClient : IDisposable
     /// <summary>Hand a freshly spawned object from the AI system to us, then
     /// freeze it. AIReleaseControl is essential — otherwise the AI system keeps
     /// fighting our SetData writes and the object snaps back to its spawn point.</summary>
-    public void ReleaseAndFreeze(uint objectId, uint lightIndex)
+    public void ReleaseAndFreeze(uint objectId, uint slot)
     {
         if (_sim == null) return;
-        try { _sim.AIReleaseControl(objectId, (REQUEST)((uint)REQUEST.ReleaseBase + lightIndex)); }
-        catch (COMException ex) { Log?.Invoke($"AIReleaseControl failed: {ex.Message}"); }
-        FreezeLight(objectId);
+        try { _sim.AIReleaseControl(objectId, (REQUEST)((uint)REQUEST.ReleaseBase + slot % SpawnSlots)); }
+        catch (COMException ex) { Log?.Invoke($"AIReleaseControl fehlgeschlagen: {ex.Message}"); }
+        FreezeObject(objectId);
     }
 
     /// <summary>Freeze physics on a spawned object so our position writes stick.</summary>
-    public void FreezeLight(uint objectId)
+    public void FreezeObject(uint objectId)
     {
         TransmitTo(objectId, SimEvent.FREEZE_LATITUDE_LONGITUDE_SET, 1);
         TransmitTo(objectId, SimEvent.FREEZE_ALTITUDE_SET, 1);
         TransmitTo(objectId, SimEvent.FREEZE_ATTITUDE_SET, 1);
     }
 
-    public void RemoveLight(uint objectId, uint lightIndex)
+    /// <summary>Switch the exterior lights of a spawned aircraft on/off. Released,
+    /// frozen AI aircraft keep the state; nothing turns them back off.</summary>
+    public void SetObjectLights(uint objectId, bool on)
+    {
+        uint v = on ? 1u : 0u;
+        TransmitTo(objectId, SimEvent.NAV_LIGHTS_SET, v);
+        TransmitTo(objectId, SimEvent.STROBES_SET, v);
+        TransmitTo(objectId, SimEvent.BEACON_LIGHTS_SET, v);
+        TransmitTo(objectId, SimEvent.LOGO_LIGHTS_SET, v);
+    }
+
+    public void RemoveObject(uint objectId, uint slot)
     {
         if (_sim == null) return;
         try
         {
-            _sim.AIRemoveObject(objectId, (REQUEST)((uint)REQUEST.LightRemoveBase + lightIndex));
+            _sim.AIRemoveObject(objectId, (REQUEST)((uint)REQUEST.RemoveBase + slot % SpawnSlots));
         }
         catch (COMException) { /* already gone */ }
     }
@@ -279,7 +329,8 @@ public sealed class SimConnectClient : IDisposable
 
     private void OnOpen(SimConnect s, SIMCONNECT_RECV_OPEN data)
     {
-        Log?.Invoke($"Connected to {data.szApplicationName}.");
+        _exceptionCounts.Clear();
+        Log?.Invoke($"Verbunden mit {data.szApplicationName}.");
         // Per SIM FRAME: the reference position must be fresh, otherwise spawned
         // objects placed relative to it lag behind and snap forward each update.
         s.RequestDataOnSimObject(REQUEST.PlaneState, DEFINITION.PlaneState,
@@ -290,12 +341,36 @@ public sealed class SimConnectClient : IDisposable
 
     private void OnQuit(SimConnect s, SIMCONNECT_RECV data)
     {
-        Log?.Invoke("Simulator closed.");
+        Log?.Invoke("MSFS wurde beendet.");
+        SimQuit?.Invoke();
         Disconnect();
     }
 
-    private void OnException(SimConnect s, SIMCONNECT_RECV_EXCEPTION data) =>
-        Log?.Invoke($"SimConnect exception: {(SIMCONNECT_EXCEPTION)data.dwException}");
+    private void OnException(SimConnect s, SIMCONNECT_RECV_EXCEPTION data)
+    {
+        // The same exception can fire every frame (e.g. writes to a removed object):
+        // explain it once in German, then stay quiet.
+        _exceptionCounts.TryGetValue(data.dwException, out int n);
+        _exceptionCounts[data.dwException] = ++n;
+        if (n <= 2)
+            Log?.Invoke($"SimConnect-Hinweis: {Explain(data.dwException)}");
+        else if (n == 3)
+            Log?.Invoke("(weitere gleiche SimConnect-Hinweise werden ausgeblendet)");
+    }
+
+    // Numeric values of SIMCONNECT_EXCEPTION (SimConnect.h), so we don't depend on
+    // member names of the managed enum.
+    private static string Explain(uint code) => code switch
+    {
+        3 => "Objekt existiert nicht mehr (harmlos, z. B. nach Flugende).",
+        7 => "Ein Event- oder Variablenname ist dieser MSFS-Version unbekannt (harmlos).",
+        11 => "Zu viele KI-Objekte im Sim.",
+        22 => "Objekt konnte nicht erzeugt werden. Stimmt der Titel exakt (Groß-/Kleinschreibung)? "
+              + "Ist das Paket im Community-Ordner und wurde MSFS danach neu gestartet?",
+        24 => "Diese Aktion ist für diesen Objekttyp nicht möglich (harmlos).",
+        33 => "Objekt liegt außerhalb des sichtbaren Bereichs des Sims und wurde nicht erzeugt.",
+        _ => $"{(SIMCONNECT_EXCEPTION)code} (Code {code})",
+    };
 
     private void OnSimobjectData(SimConnect s, SIMCONNECT_RECV_SIMOBJECT_DATA data)
     {
@@ -307,7 +382,7 @@ public sealed class SimConnectClient : IDisposable
                 break;
             case REQUEST.Title when data.dwData[0] is TitleStruct t:
                 var title = t.Value?.Trim() ?? "";
-                Log?.Invoke($"Current aircraft title: '{title}'");
+                Log?.Invoke($"Titel des geladenen Flugzeugs: „{title}“");
                 TitleReceived?.Invoke(title);
                 break;
         }
@@ -315,12 +390,9 @@ public sealed class SimConnectClient : IDisposable
 
     private void OnAssignedObjectId(SimConnect s, SIMCONNECT_RECV_ASSIGNED_OBJECT_ID data)
     {
-        if (data.dwRequestID >= (uint)REQUEST.LightBase &&
-            data.dwRequestID < (uint)REQUEST.LightRemoveBase)
-        {
-            uint lightIndex = data.dwRequestID - (uint)REQUEST.LightBase;
-            ObjectAssigned?.Invoke(lightIndex, data.dwObjectID);
-        }
+        uint b = (uint)REQUEST.SpawnBase;
+        if (data.dwRequestID >= b && data.dwRequestID < b + SpawnSlots)
+            ObjectAssigned?.Invoke(data.dwRequestID - b, data.dwObjectID);
     }
 
     public void Disconnect()

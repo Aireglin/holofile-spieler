@@ -11,17 +11,19 @@ internal static class WavSynth
 {
     private const int SampleRate = 44100;
 
-    /// <summary>Deep continuous drone (the classic "hum").</summary>
+    /// <summary>Deep continuous drone (the classic "hum"). 30 s long and seamless:
+    /// every component completes whole cycles (68·30, 34·30, 102·30, 69·30, 1 Hz
+    /// tremolo), so the MediaPlayer restart gap comes only every 30 s.</summary>
     public static short[] Drone(double baseHz = 68.0)
     {
-        const double seconds = 2.0;
+        const double seconds = 30.0;
         int n = (int)(SampleRate * seconds);
         var pcm = new short[n];
         double peak = 0.8 * short.MaxValue;
         for (int i = 0; i < n; i++)
         {
             double t = (double)i / SampleRate;
-            double trem = 0.8 + 0.2 * Math.Sin(2 * Math.PI * (2.0 / seconds) * t);
+            double trem = 0.8 + 0.2 * Math.Sin(2 * Math.PI * 1.0 * t);
             double s = Math.Sin(2 * Math.PI * baseHz * t)
                      + 0.55 * Math.Sin(2 * Math.PI * (baseHz / 2) * t)
                      + 0.30 * Math.Sin(2 * Math.PI * (baseHz * 1.5) * t)
@@ -31,14 +33,16 @@ internal static class WavSynth
         return pcm;
     }
 
-    /// <summary>Very low pulsing sub-bass — felt more than heard; "approach".</summary>
-    public static short[] SubBass(double hz = 31.0)
+    /// <summary>Very low pulsing sub-bass — felt more than heard; "approach".
+    /// 31.25 Hz × 32 s = 1000 cycles (and 15.625 Hz = 500), so the loop closes
+    /// without a click.</summary>
+    public static short[] SubBass(double hz = 31.25)
     {
-        const double seconds = 3.2;
+        const double seconds = 32.0;
         int n = (int)(SampleRate * seconds);
         var pcm = new short[n];
         double peak = 0.95 * short.MaxValue;
-        double pulses = 4; // integer pulses across the loop -> seamless
+        double pulses = 40; // 1.25 Hz throb, whole pulses across the loop -> seamless
         for (int i = 0; i < n; i++)
         {
             double t = (double)i / SampleRate;

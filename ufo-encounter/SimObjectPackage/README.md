@@ -1,57 +1,42 @@
-# Licht-only SimObject (Plan B) — Gerüst
+# Licht-Paket (nur Lichter, ohne 3D-Modell)
 
-Ziel: ein **eigenes, licht-only SimObject** (`UFO_Light`), das nur einen
-Leuchtpunkt zeigt – **kein Flugzeugmodell**. Damit zeigen die kleinen
-Encounter-Lichter nur Licht, auch bei Tag.
+Das Paket wird **direkt vom Programm erzeugt**. Du brauchst kein Blender und
+keine Dateien aus diesem Ordner:
 
-> **Status: Gerüst / Work in Progress.** Die Config-Dateien stehen; der **eine
-> noch fehlende Baustein ist das 3D-Modell** (`UFO_Light.gltf`). Ohne den Sim
-> zum Testen lässt sich das Modell nicht blind fertig erzeugen – das machen wir
-> gemeinsam im **Dev Mode** (du lädst, ich reagiere auf die Konsolen-Meldungen).
+**Tab „Objekte & Lichter“ → „Licht-Paket erzeugen / aktualisieren“**
 
-## Ordnerstruktur
+Das Programm findet den Community-Ordner von MSFS 2024 automatisch (über
+`UserCfg.opt` → `InstalledPackagesPath`, Steam- und Store-Version). Wird er
+nicht gefunden, fragt es nach dem Ordner. Danach **MSFS einmal neu starten**,
+weil Pakete nur beim Start geladen werden.
 
-```
-ufo-light/
-├─ manifest.json
-├─ layout.json                      ← per build-layout.ps1 erzeugen
-└─ SimObjects/Misc/UFO_Light/
-   ├─ sim.cfg                       ← title = UFO_Light, category = SimpleObject
-   └─ model/
-      ├─ model.cfg                  ← verweist auf UFO_Light.gltf
-      └─ UFO_Light.gltf  (+ .bin)   ← FEHLT NOCH (das Modell)
-```
+## Was erzeugt wird
 
-## Der fehlende Baustein: das Modell
+`Community/ufo-encounter-lights/`. Alle Objekte sind einfache SimObjects
+(`category = SimpleObject`), Titel beginnen mit `UFOE_`:
 
-Drei Wege, das `UFO_Light.gltf` zu bekommen — vom einfachsten zum saubersten:
+| Titel | Inhalt |
+|---|---|
+| `UFOE_Licht_<Farbe>_Ruhig` / `_Puls` / `_Blitz` | nur eine Lichtquelle mit Lens-Flare, **kein Mesh** – 7 Farben (Weiss, Rot, Gruen, Blau, Bernstein, Violett, Cyan) |
+| `UFOE_Kugel_<Farbe>` | kleine leuchtende Kugel (emissives Material) plus Licht – gut bei Tageslicht |
+| `UFOE_Test_Macro_Weiss` | Diagnose: älteres Licht-Format (MSFS 2020) |
 
-1. **Fertiges Objekt nutzen (empfohlen für den Start):** Ein „orb/light/UFO"
-   SimObject von flightsim.to installieren und im Tool einfach dessen **Titel**
-   eintragen. Dann braucht es dieses Paket gar nicht.
-2. **Blender + Asobo glTF-Exporter:** ein winziges (z. B. 5 cm), transparentes
-   Mesh mit **emissivem Material** (hell) bauen und als `UFO_Light.gltf`
-   exportieren. Optional eine MSFS-Lichtquelle/Effekt an einen Node hängen.
-3. **Aus einem bestehenden Licht-Objekt ableiten:** Modell + `model.cfg` eines
-   vorhandenen Licht-SimObjects übernehmen und Titel/Pfade anpassen.
+Technik: Jede Variante ist ein handgeschriebenes glTF mit einem Knoten, der die
+Asobo-Licht-Extension `ASOBO_street_light` trägt (Schlüssel wie im
+Asobo-Exporter). `model.cfg` verweist auf eine `ModelInfo`/`LODS`-XML. Das
+ist derselbe Aufbau wie bei Mesh-losen glTFs in ausgelieferten Paketen
+(z. B. FlyByWire). `layout.json` und `manifest.json` schreibt das Programm
+selbst. Alle glTF-Dateien bestehen den Khronos glTF-Validator ohne Fehler.
 
-## Installieren & testen (Steam, Dev Mode)
+## Testen
 
-1. `build-layout.ps1` ausführen, um `layout.json` zu erzeugen:
-   ```powershell
-   cd ufo-encounter/SimObjectPackage
-   .\build-layout.ps1 -PackageDir .\ufo-light
-   ```
-2. Den Ordner `ufo-light` in deinen **Community-Ordner** kopieren.
-3. MSFS starten (oder im **Dev Mode**: *Tools → Virtual File System →
-   Watch Bases / Reload*), damit das Paket geladen wird.
-4. Im Tool als **Licht-Titel** `UFO_Light` eintragen, „Objekte sind Flugzeuge"
-   **aus**, und **Test: Pop-up** drücken.
-5. Erscheint nichts oder ein Fehler: die **Dev-Mode-Konsole** (Fehler/Warnungen)
-   kopieren – damit justieren wir `sim.cfg`/`model.cfg`/Modell.
+1. Paket erzeugen, MSFS neu starten, in einen Flug gehen (nachts sieht man es am besten).
+2. Bei der Nachfrage „Licht-Titel setzen?“ **Ja** wählen, oder Titel selbst eintragen.
+3. Tab „Objekte & Lichter“ → **Muster testen**.
+4. Erscheint nichts: einzeln `UFOE_Kugel_Weiss` und `UFOE_Test_Macro_Weiss`
+   probieren und kurz melden, was sichtbar ist (Punkt / Kugel / nichts).
+   Danach lässt sich der Generator gezielt anpassen.
 
-## Was ich von dir brauche, um es fertigzustellen
-
-- Den **Community-Ordner-Pfad** (aus `UserCfg.opt` → `InstalledPackagesPath`).
-- Beim ersten Laden die **Konsolen-Ausgabe** aus dem Dev Mode.
-- Kurz, **was sichtbar ist** (nichts / Punkt / falsche Größe/Farbe).
+Generierte Objekte werden automatisch als SimObject gespawnt. Alle anderen
+Titel, etwa ein übernommenes Flugzeug, werden als Flugzeug gespawnt. Eine
+Checkbox dafür gibt es nicht mehr.
