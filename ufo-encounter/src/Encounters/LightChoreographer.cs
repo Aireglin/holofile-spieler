@@ -138,6 +138,7 @@ public sealed class LightChoreographer
     private double _lastFrame = -1;
     private double _departAccel = 230;
     private double _speedScale = 0.6, _minDistance;
+    private double _tsBias;   // keeps the scaled clock continuous on live speed changes
     private int _session;
     private uint _nextSlot;
 
@@ -166,6 +167,10 @@ public sealed class LightChoreographer
 
     public void SetRandom(Random rng) => _rng = rng;
 
+    /// <summary>Prefix that forces a plain SimObject spawn for titles that are not
+    /// aircraft and not from the generated package, e.g. "obj:My Orb".</summary>
+    public const string ObjectPrefix = "obj:";
+
     /// <summary>Objects from the generated light package are plain SimObjects;
     /// every other title (captured from a loaded aircraft) is an aircraft.</summary>
     public static bool IsAircraftTitle(string title) =>
@@ -173,13 +178,15 @@ public sealed class LightChoreographer
 
     /// <summary>Spawn objects for a new session. <paramref name="titles"/> may be a
     /// comma-separated list; each object picks one at random (mixed colours).
-    /// Speed and minimum distance are fixed for the session. Returns the session
-    /// id, or -1 if nothing was started.</summary>
+    /// Speed and minimum distance are fixed for the session (a pattern test can
+    /// update them via <see cref="UpdateLiveTuning"/>). Returns the session id,
+    /// or -1 if nothing was started.</summary>
     public int Start(LightPattern pattern, int count, double durationSec, string titles,
         double speedScale, double minDistance)
     {
         if (!_sim.IsConnected) { _log?.Invoke("Objekte: keine Verbindung zum Sim."); return -1; }
-        var list = (titles ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var list = (titles ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(t => !t.Equals(ObjectPrefix, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (list.Length == 0)
         {
             _log?.Invoke("Objekte: kein SimObject-Titel gesetzt (Tab „Objekte & Lichter“).");
@@ -194,6 +201,7 @@ public sealed class LightChoreographer
         _durationSec = Math.Max(1, durationSec);
         _speedScale = Math.Clamp(speedScale, 0.1, 2.0);
         _minDistance = Math.Max(0, minDistance);
+        _tsBias = 0;
         double now = Now;
         _sessionStart = _phaseStart = now;
         _blendDur = 0;
@@ -203,13 +211,15 @@ public sealed class LightChoreographer
         count = pattern == LightPattern.Mothership ? 1 : Math.Clamp(count, 1, 8);
         for (uint i = 0; i < count; i++)
         {
-            string title = list[_rng.Next(list.Length)];
+            string raw = list[_rng.Next(list.Length)];
+            bool forceObject = raw.StartsWith(ObjectPrefix, StringComparison.OrdinalIgnoreCase);
+            string title = forceObject ? raw[ObjectPrefix.Length..].Trim() : raw;
             var l = new Light
             {
                 Index = i,
                 Slot = _nextSlot++ % SimConnectClient.SpawnSlots,
                 Title = title,
-                AsAircraft = IsAircraftTitle(title),
+                AsAircraft = !forceObject && IsAircraftTitle(title),
                 SpawnedAt = now,
                 V = RollVars(),
             };
@@ -225,6 +235,21 @@ public sealed class LightChoreographer
         _log?.Invoke($"Objekte: {count}× erzeugt – {PatternNames.German(pattern)}.");
         PatternChanged?.Invoke(pattern);
         return _session;
+    }
+
+    /// <summary>Live slider tuning for a running pattern test; ignored for any other
+    /// session. The scaled clock stays continuous (no jump); the minimum radius
+    /// already eases towards its new target every frame.</summary>
+    public void UpdateLiveTuning(int session, double speedScale, double minDistance)
+    {
+        if (!IsActive || session != _session) return;
+        double s = Math.Clamp(speedScale, 0.1, 2.0);
+        if (s != _speedScale)
+        {
+            _tsBias += (Now - _sessionStart) * (_speedScale - s);
+            _speedScale = s;
+        }
+        _minDistance = Math.Max(0, minDistance);
     }
 
     /// <summary>Switch the motion pattern live, keeping the spawned objects. Each
@@ -356,7 +381,8 @@ public sealed class LightChoreographer
                 {
                     l.Warned = true;
                     _log?.Invoke($"⚠ Objekt „{l.Title}“ ist nach 5 s nicht erschienen. Titel exakt prüfen "
-                                 + "(oder per „Aktuelles Flugzeug übernehmen“ holen); bei Paket-Objekten MSFS neu starten.");
+                                 + "(oder per „Übernehmen“ holen); bei Paket-Objekten MSFS neu starten."
+                                 + (l.AsAircraft ? " Ist es kein Flugzeug (z. B. ein Orb-Objekt), „obj:“ vor den Titel schreiben." : ""));
                 }
                 continue;
             }
@@ -444,7 +470,7 @@ public sealed class LightChoreographer
         double ph = v.Phase;
         int idx = (int)l.Index;
         int n = Math.Max(1, _lights.Count);
-        double ts = tsess * v.Speed * _speedScale;
+        double ts = (tsess * _speedScale + _tsBias) * v.Speed;
 
         // Organic wander per axis (different seeds), scaled by amplitude.
         double wr = Wander(ts, ph) * v.Amp;

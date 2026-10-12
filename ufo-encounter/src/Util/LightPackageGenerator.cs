@@ -104,8 +104,15 @@ public static class LightPackageGenerator
         {
             string manifest = Path.Combine(root, "manifest.json");
             if (!File.Exists(manifest) || !File.ReadAllText(manifest).Contains($"\"creator\": \"{Creator}\""))
-                throw new IOException($"Der Ordner „{root}“ existiert bereits und stammt nicht von diesem Programm.");
-            Directory.Delete(root, recursive: true);
+                throw new InvalidOperationException($"Der Ordner „{root}“ existiert bereits und stammt nicht von diesem Programm.");
+            // Clear the old content but keep manifest.json (rewritten at the end). If
+            // MSFS or Explorer still holds a file open, the delete throws while the
+            // manifest survives, so a retry after closing MSFS still recognises the folder.
+            foreach (var dir in Directory.GetDirectories(root))
+                Directory.Delete(dir, recursive: true);
+            foreach (var file in Directory.GetFiles(root))
+                if (!Path.GetFileName(file).Equals("manifest.json", StringComparison.OrdinalIgnoreCase))
+                    File.Delete(file);
         }
 
         string simDir = Path.Combine(root, SimObjectDir.Replace('/', Path.DirectorySeparatorChar));

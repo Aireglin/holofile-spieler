@@ -206,22 +206,25 @@ public sealed class SimConnectClient : IDisposable
             _sim!.MapClientEventToSimEvent(e, e.ToString());
     }
 
-    /// <summary>Fire a (toggle/set) event at the user aircraft.</summary>
-    public void Transmit(SimEvent e, uint data = 0) =>
+    /// <summary>Fire a (toggle/set) event at the user aircraft. Returns false if
+    /// nothing was sent (not connected, or SimConnect refused).</summary>
+    public bool Transmit(SimEvent e, uint data = 0) =>
         TransmitTo(SimConnect.SIMCONNECT_OBJECT_ID_USER, e, data);
 
     /// <summary>Fire a (toggle/set) event at a specific object id.</summary>
-    public void TransmitTo(uint objectId, SimEvent e, uint data = 0)
+    public bool TransmitTo(uint objectId, SimEvent e, uint data = 0)
     {
-        if (_sim == null) return;
+        if (_sim == null) return false;
         try
         {
             _sim.TransmitClientEvent(objectId, e, data,
                 GROUP.Priority, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
+            return true;
         }
         catch (COMException ex)
         {
             Log?.Invoke($"Event {e} fehlgeschlagen: {ex.Message}");
+            return false;
         }
     }
 

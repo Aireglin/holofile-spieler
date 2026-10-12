@@ -95,6 +95,8 @@ public sealed class ElectricalDisruptor
     // Restore that could not be sent because the connection was down.
     private bool _restorePending;
     private DateTime _pendingSince;
+    // When the last restore went out: the SimVars lag a moment behind the toggles.
+    private DateTime _lastRestoreSentUtc = DateTime.MinValue;
 
     public bool IsActive { get; private set; }
 
@@ -103,6 +105,9 @@ public sealed class ElectricalDisruptor
         _sim = sim;
         _log = log;
         _sim.Connected += OnReconnected;
+        // Connection lost mid-run: stop toggling at once; the finally block of
+        // RunAsync then parks the restore until the reconnect.
+        _sim.Disconnected += () => _runCts?.Cancel();
         _sim.SimQuit += () =>
         {
             // MSFS closed: the aircraft is gone, nothing to restore any more.
@@ -127,6 +132,7 @@ public sealed class ElectricalDisruptor
         {
             if (plan.StartDelay > TimeSpan.Zero)
                 await Task.Delay(plan.StartDelay, token);
+            if (!_sim.IsConnected) return;
             SeedFromSim();   // read the switches only now, after the delay
 
             switch (plan.Kind)
@@ -189,16 +195,17 @@ public sealed class ElectricalDisruptor
     {
         if (plan.UseFullShutdown)
         {
-            _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN);
-            _engineCut = true;
+            CutEngine();
             return;
         }
         SetAllPower(false);
-        if (plan.CutEngine)
-        {
-            _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN);
-            _engineCut = true;
-        }
+        if (plan.CutEngine) CutEngine();
+    }
+
+    private void CutEngine()
+    {
+        if (_engineCut) return;
+        if (_sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_SHUTDOWN)) _engineCut = true;
     }
 
     /// <summary>Irregular on/off flicker for the given span (off-phases skew longer).</summary>
@@ -228,6 +235,10 @@ public sealed class ElectricalDisruptor
     /// <summary>Re-sync believed state from the live SimVars.</summary>
     private void SeedFromSim()
     {
+        // Right after a restore the SimVars may still show the old "off" state;
+        // seeding from them would invert the next toggles. The restore just set
+        // everything on, so the reset "all on" state is the right belief.
+        if (DateTime.UtcNow - _lastRestoreSentUtc < TimeSpan.FromSeconds(1.5)) return;
         var s = _sim.State;
         _battery = s.MasterBattery > 0.5;
         _alts[0] = s.MasterAlternator > 0.5;
@@ -267,11 +278,17 @@ public sealed class ElectricalDisruptor
             }
             return;
         }
-        if (!_battery) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_MASTER_BATTERY); _battery = true; }
-        for (int i = 0; i < _alts.Length; i++)
-            if (!_alts[i]) { _sim.Transmit(AltEvents[i]); _alts[i] = true; }
-        if (!_avionics) { _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_AVIONICS_MASTER); _avionics = true; }
-        if (_engineCut) { _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_START); _engineCut = false; }
+        SetAllPower(true);
+        if (_engineCut && _sim.Transmit(SimConnectClient.SimEvent.ENGINE_AUTO_START)) _engineCut = false;
+        _lastRestoreSentUtc = DateTime.UtcNow;
+        if (NeedsRestore)
+        {
+            // Some toggle did not go out (SimConnect refused it). Keep it pending
+            // so a reconnect can retry; the believed state still says "off".
+            if (!_restorePending) { _restorePending = true; _pendingSince = DateTime.UtcNow; }
+            _log?.Invoke("⚠ Strom konnte nicht vollständig wiederhergestellt werden. Bitte Schalter im Cockpit prüfen.");
+            return;
+        }
         _restorePending = false;
         _log?.Invoke("Elektrik: Strom wiederhergestellt.");
     }
@@ -291,11 +308,12 @@ public sealed class ElectricalDisruptor
         RestorePower();
     }
 
+    // The believed state only flips when the toggle actually went out; a lost
+    // toggle must not make us "restore" a switch that never went off.
     private void SetBattery(bool on)
     {
         if (_battery == on) return;
-        _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_MASTER_BATTERY);
-        _battery = on;
+        if (_sim.Transmit(SimConnectClient.SimEvent.TOGGLE_MASTER_BATTERY)) _battery = on;
     }
 
     private void SetAllAlternators(bool on)
@@ -303,15 +321,13 @@ public sealed class ElectricalDisruptor
         for (int i = 0; i < _alts.Length; i++)
         {
             if (_alts[i] == on) continue;
-            _sim.Transmit(AltEvents[i]);
-            _alts[i] = on;
+            if (_sim.Transmit(AltEvents[i])) _alts[i] = on;
         }
     }
 
     private void SetAvionics(bool on)
     {
         if (_avionics == on) return;
-        _sim.Transmit(SimConnectClient.SimEvent.TOGGLE_AVIONICS_MASTER);
-        _avionics = on;
+        if (_sim.Transmit(SimConnectClient.SimEvent.TOGGLE_AVIONICS_MASTER)) _avionics = on;
     }
 }

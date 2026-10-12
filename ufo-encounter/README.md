@@ -69,7 +69,13 @@ nächsten Zufalls-Begegnung. Dort sitzen auch die Buttons **„▶ Begegnung jet
 **Objekt-Titel**: Das gewünschte Flugzeug in MSFS laden und **„Übernehmen“**
 klicken, dann steht der exakte Titel im Feld. Mehrere Titel mit Komma ergeben
 einen Zufallsmix. Titel aus dem Licht-Paket (`UFOE_…`) werden automatisch als
-einfaches SimObject gespawnt, alle anderen als Flugzeug.
+einfaches SimObject gespawnt, alle anderen als Flugzeug. Ein fremdes einfaches
+SimObject, das kein Flugzeug ist, bekommt `obj:` vor den Titel (z. B.
+`obj:Mein Orb`).
+
+**Muster testen**: Während ein Test läuft, wirken die Regler für Tempo und
+Mindestabstand sofort. Die Elektrik-Tests laufen nur ohne laufende Begegnung,
+und eine Begegnung wartet, bis ein Elektrik-Test vorbei ist.
 
 ## Voraussetzungen
 

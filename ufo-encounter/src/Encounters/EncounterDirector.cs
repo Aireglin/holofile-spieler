@@ -32,6 +32,9 @@ public sealed class EncounterDirector
     private Random _rng = new();
     private CancellationTokenSource? _current;
     private CancellationTokenSource? _testCts;
+    private int _testSession = -1;
+    // Last "random mode waits" reason, so the log says it once instead of every tick.
+    private string? _waitReason;
 
     // Live audio targets, consumed (and smoothed) by the audio timer.
     private double _proxTarget;
@@ -42,7 +45,23 @@ public sealed class EncounterDirector
     // ---- Tunables (bound to the UI) ----
     public bool RealismLock { get; set; } = true;
     public double MinAglFeet { get; set; } = 1500;
-    public double FrequencyPerMin { get; set; } = 1.0;
+    private double _frequencyPerMin = 1.0;
+    public double FrequencyPerMin
+    {
+        get => _frequencyPerMin;
+        set
+        {
+            double oldF = Math.Max(0.05, _frequencyPerMin), newF = Math.Max(0.05, value);
+            _frequencyPerMin = value;
+            if (newF == oldF || !IsRandomMode || NextRandomEncounterUtc is not DateTime next) return;
+            // Slider moved while random mode runs: rescale the remaining wait so the
+            // change applies now (no new dice roll, seeded runs stay repeatable).
+            double remaining = Math.Max(0, (next - DateTime.UtcNow).TotalSeconds);
+            var gap = TimeSpan.FromSeconds(Math.Max(1, remaining * oldF / newF));
+            _scheduler.Interval = gap;   // restarts the running timer from now
+            NextRandomEncounterUtc = DateTime.UtcNow + gap;
+        }
+    }
     public double MinDurationSec { get; set; } = 4;
     public double MaxDurationSec { get; set; } = 12;
     public double Intensity { get; set; } = 0.6;
@@ -103,6 +122,17 @@ public sealed class EncounterDirector
         _scheduler.Tick += OnSchedulerTick;
         _audioTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _audioTimer.Tick += OnAudioTick;
+
+        // Connection gone (MSFS closed/crashed): end whatever runs. The finally blocks
+        // silence the audio, remove objects, clear the status and free the stage. Cut
+        // power stays pending in the disruptor and is replayed on reconnect.
+        _sim.Disconnected += () =>
+        {
+            if (IsEncounterActive || _testCts != null)
+                _trace?.Invoke("Verbindung getrennt – laufende Begegnung/Test abgebrochen.");
+            _testCts?.Cancel();
+            _current?.Cancel();
+        };
     }
 
     private EncounterTuning UserTuning => new(LightCount, Dread, SpeedScale, MinDistanceMeters);
@@ -148,9 +178,13 @@ public sealed class EncounterDirector
         NextRandomEncounterUtc = DateTime.UtcNow + gap;
     }
 
-    private bool Busy => IsEncounterActive || _testCts != null;
+    private bool Busy => IsEncounterActive || _testCts != null || _disruptor.IsActive;
 
-    /// <summary>Claim the stage: refuse while an encounter runs, cancel a running test.</summary>
+    /// <summary>An encounter or test is running (random ticks are skipped meanwhile).</summary>
+    public bool IsBusy => Busy;
+
+    /// <summary>Claim the stage: refuse while an encounter or an electrical test
+    /// runs, cancel a running pattern test.</summary>
     private bool TryBeginExclusive()
     {
         if (IsEncounterActive)
@@ -158,7 +192,17 @@ public sealed class EncounterDirector
             _trace?.Invoke("Es läuft bereits eine Begegnung – bitte warten oder PANIK-STOP.");
             return false;
         }
-        _testCts?.Cancel();
+        if (_disruptor.IsActive)
+        {
+            // Not cancelled here: IsActive only clears in RunAsync's finally on a later
+            // dispatcher pass, so the new encounter's first failure would be dropped.
+            _trace?.Invoke("Es läuft gerade ein Elektrik-Test – bitte kurz warten oder PANIK-STOP.");
+            return false;
+        }
+        var test = _testCts;
+        _testCts = null;
+        _testSession = -1;
+        test?.Cancel();
         return true;
     }
 
@@ -166,13 +210,22 @@ public sealed class EncounterDirector
     {
         ScheduleNext();
         if (Busy) return;
-        if (!CanTriggerNow())
+        if (!_sim.IsConnected) { LogWait("Zufallsmodus wartet auf die Verbindung zu MSFS."); return; }
+        if (!CanTriggerNow())   // connected here, so only the realism lock can refuse
         {
-            _trace?.Invoke("Zufallsmodus wartet (Realismus-Lock: am Boden oder unter Min-AGL).");
+            LogWait("Zufallsmodus wartet (Realismus-Lock: am Boden oder unter Min-AGL).");
             return;
         }
+        _waitReason = null;
         try { await RunRandomEncounterAsync(); }
         catch (Exception ex) { _trace?.Invoke($"Fehler im Zufallsmodus: {ex.Message}"); }
+    }
+
+    private void LogWait(string reason)
+    {
+        if (reason == _waitReason) return;
+        _waitReason = reason;
+        _trace?.Invoke(reason);
     }
 
     /// <summary>A fully randomized encounter (random mode, hotkey, "Begegnung jetzt").</summary>
@@ -255,11 +308,14 @@ public sealed class EncounterDirector
             if (_sim.State.AltitudeAgl >= HolyGrailMinAglFeet) { await RunHolyGrailAsync(explicitTest: false); return; }
             _trace?.Invoke("(Holy Grail ausgelassen – zu niedrig für einen Motorausfall.)");
         }
-        bool allowElec = manual || signature || _rng.NextDouble() < DisruptionChance;
+        // Random extra failures follow the slider; a scenario button only
+        // guarantees the scenario's OWN failure.
+        bool allowRandom = signature || _rng.NextDouble() < DisruptionChance;
+        bool allowCore = manual || allowRandom;
         bool chain = forceMultiPhase ?? MultiPhase;
         var phases = (chain || signature)
-            ? BuildChain(scenario, signature, allowElec, tu.Dread)
-            : BuildSinglePhase(scenario, RandomDuration(), allowElec);
+            ? BuildChain(scenario, signature, allowCore, allowRandom, tu.Dread)
+            : BuildSinglePhase(scenario, RandomDuration(), allowCore);
 
         var ct = (_current = new CancellationTokenSource()).Token;
         IsEncounterActive = true;
@@ -353,7 +409,7 @@ public sealed class EncounterDirector
     /// scenario's own "core" (its pattern, and its failure when it has one), so
     /// a scenario button always delivers that scenario. Mothership/signature stay
     /// slow and majestic. The fly-away finish is added by the caller.</summary>
-    private List<Phase> BuildChain(EncounterScenario s, bool signature, bool allowElec, double d)
+    private List<Phase> BuildChain(EncounterScenario s, bool signature, bool allowCore, bool allowRandom, double d)
     {
         var phases = new List<Phase>();
         bool ship = s.Mothership || signature;
@@ -363,12 +419,9 @@ public sealed class EncounterDirector
             phases.Add(new("Annäherung", 5 + 3 * (1 - d), LightPattern.Mothership, DisruptionKind.None,
                 Proximity: 0.3, Whoosh: true, SubBass: false));
             var disr = DisruptionKind.None;
-            if (allowElec)
-            {
-                if (signature || s.Disruption == DisruptionKind.DeepBlackout) disr = DisruptionKind.DeepBlackout;
-                else if (s.Disruption != DisruptionKind.None) disr = s.Disruption;
-                else if (_rng.NextDouble() < 0.5 + 0.4 * d) disr = DisruptionKind.DeepBlackout;
-            }
+            if (allowCore && (signature || s.Disruption == DisruptionKind.DeepBlackout)) disr = DisruptionKind.DeepBlackout;
+            else if (allowCore && s.Disruption != DisruptionKind.None) disr = s.Disruption;
+            else if (allowRandom && _rng.NextDouble() < 0.5 + 0.4 * d) disr = DisruptionKind.DeepBlackout;
             phases.Add(new("Präsenz", signature ? 16 + 12 * d : 10 + 10 * d, LightPattern.Mothership, disr,
                 Proximity: Math.Min(1.0, 0.6 + 0.3 * d), Whoosh: false, SubBass: true));
             return phases;
@@ -386,6 +439,10 @@ public sealed class EncounterDirector
         // 2–4 chained behaviours; one is the scenario's core.
         int segs = _rng.Next(2, 5);
         int core = _rng.Next(segs);
+        // Only one failure runs at a time. When the core carries the scenario's own
+        // failure, the segments before it stay calm so a still-running random
+        // failure can never swallow it.
+        bool coreOwnsFailure = allowCore && s.Disruption != DisruptionKind.None;
         for (int i = 0; i < segs; i++)
         {
             LightPattern pat;
@@ -393,13 +450,14 @@ public sealed class EncounterDirector
             if (i == core)
             {
                 pat = s.Lights ?? RandomLightPattern();
-                if (allowElec && s.Disruption != DisruptionKind.None) disr = s.Disruption;
-                else if (allowElec && _rng.NextDouble() < 0.35 + 0.4 * d) disr = RandomDisruption();
+                if (coreOwnsFailure) disr = s.Disruption;
+                else if (allowRandom && _rng.NextDouble() < 0.35 + 0.4 * d) disr = RandomDisruption();
             }
             else
             {
                 pat = RandomLightPattern();
-                if (allowElec && _rng.NextDouble() < 0.35 + 0.4 * d) disr = RandomDisruption();
+                bool mayFail = allowRandom && !(coreOwnsFailure && i < core);
+                if (mayFail && _rng.NextDouble() < 0.35 + 0.4 * d) disr = RandomDisruption();
             }
             bool sub = disr != DisruptionKind.None || _rng.NextDouble() < 0.5;
             phases.Add(new(PatternNames.German(pat), SegDuration(pat), pat, disr,
@@ -625,7 +683,8 @@ public sealed class EncounterDirector
         _trace?.Invoke("▶ Jet-Verfolgung (JAL1628-Stil)");
         _log.Record("Jet-Verfolgung", _sim.State);
 
-        string jetTitle = FirstNonEmpty(JetTitle);
+        // Empty jet title: fall back to the UFO titles.
+        string jetTitle = FirstNonEmpty(JetTitle, MothershipTitle, LightObjectTitle);
         try
         {
             _audio.StartLayers();
@@ -650,7 +709,7 @@ public sealed class EncounterDirector
             await Task.Delay(TimeSpan.FromSeconds(2 + _rng.NextDouble() * 2), ct);
             if (jetTitle.Length == 0)
             {
-                _trace?.Invoke("Jet-Titel ist leer – Jet-Phase übersprungen (Tab „Objekte & Lichter“).");
+                _trace?.Invoke("Kein Jet- oder UFO-Titel gesetzt – Jet-Phase übersprungen (Tab „Objekte & Lichter“).");
             }
             else if (LightsEnabled)
             {
@@ -689,6 +748,7 @@ public sealed class EncounterDirector
             if (_testCts == cts) _testCts = null;
             return;
         }
+        _testSession = session;
         StatusChanged?.Invoke($"Test · {PatternNames.German(pattern)}");
         try
         {
@@ -701,12 +761,17 @@ public sealed class EncounterDirector
         finally
         {
             _lights.Stop(session);
-            if (_testCts == cts)
-            {
-                _testCts = null;
-                StatusChanged?.Invoke("");
-            }
+            if (_testCts == cts) { _testCts = null; _testSession = -1; }
+            if (_testCts == null && !IsEncounterActive) StatusChanged?.Invoke("");
         }
+    }
+
+    /// <summary>Apply the speed / min-distance sliders live to a running pattern
+    /// test (never to an encounter, so its tuning stays as rolled).</summary>
+    public void ApplyLiveTestTuning()
+    {
+        if (_testCts != null && !IsEncounterActive && _testSession >= 0)
+            _lights.UpdateLiveTuning(_testSession, SpeedScale, MinDistanceMeters);
     }
 
     private double RandomDuration()

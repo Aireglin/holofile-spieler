@@ -34,6 +34,7 @@ public sealed class AppSettings
     public double? WindowTop { get; set; }
     public double? WindowWidth { get; set; }
     public double? WindowHeight { get; set; }
+    public bool WindowMaximized { get; set; }
 
     public string LightTitle { get; set; } = "";
     public string MothershipTitle { get; set; } = "";
@@ -44,6 +45,8 @@ public sealed class AppSettings
     public int BeamCount { get; set; } = 3;
     public double BeamHeight { get; set; } = 30;
     public string JetTitle { get; set; } = "";
+    /// <summary>Community folder picked by hand when auto-detection failed ("" = none).</summary>
+    public string CommunityFolder { get; set; } = "";
 }
 
 /// <summary>Loads/saves <see cref="AppSettings"/> as JSON in <see cref="AppPaths.DataDir"/>.</summary>

@@ -14,6 +14,15 @@ using UfoEncounter.Util;
 
 namespace UfoEncounter;
 
+/// <summary>One log entry. A class (reference identity) rather than a string, so
+/// ScrollIntoView finds the newest line even when the same text repeats.</summary>
+public sealed class LogLine
+{
+    public LogLine(string text) => Text = text;
+    public string Text { get; }
+    public override string ToString() => Text;
+}
+
 public partial class MainWindow : Window
 {
     private const int MaxLogLines = 400;
@@ -30,12 +39,14 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _humCts;   // hum test
     private DispatcherTimer? _reconnect;
     private DispatcherTimer? _uiTimer;           // countdown + autosave
-    private readonly ObservableCollection<string> _logLines = new();
+    private readonly ObservableCollection<LogLine> _logLines = new();
     private readonly Stopwatch _uiClock = Stopwatch.StartNew();
     private long _lastStatusMs = -1000;
     private bool _todLogged;
     private int _autosaveTicks;
     private bool _uiReady;
+    private Rect _lastNormalBounds = Rect.Empty;   // RestoreBounds is Rect.Empty once the window is closed
+    private string _communityFolder = "";          // manual pick, used only when auto-detection fails
 
     // Which field a pending "Übernehmen" (current aircraft title) should fill.
     private TextBox? _titleTarget;
@@ -67,9 +78,9 @@ public partial class MainWindow : Window
         _sim.Log += Trace;
         _sim.TitleReceived += title =>
         {
-            var target = _titleTarget ?? LightTitleBox;
-            if (!string.IsNullOrEmpty(title)) target.Text = title;
+            var target = _titleTarget;
             _titleTarget = null;
+            if (target != null && !string.IsNullOrEmpty(title)) target.Text = title;
         };
 
         _director.StatusChanged += s => EncounterText.Text = s.Length == 0 ? "Bereit." : "▶ " + s;
@@ -155,7 +166,7 @@ public partial class MainWindow : Window
     private void Trace(string msg)
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => Trace(msg)); return; }
-        _logLines.Add($"[{DateTime.Now:HH:mm:ss}] {msg}");
+        _logLines.Add(new LogLine($"[{DateTime.Now:HH:mm:ss}] {msg}"));
         while (_logLines.Count > MaxLogLines) _logLines.RemoveAt(0);
         LogList.ScrollIntoView(_logLines[^1]);
     }
@@ -208,7 +219,9 @@ public partial class MainWindow : Window
         if (_director is { IsRandomMode: true, NextRandomEncounterUtc: DateTime next })
         {
             double s = (next - DateTime.UtcNow).TotalSeconds;
-            NextText.Text = s > 1 ? $"nächste Zufalls-Begegnung in ca. {s:0} s" : "nächste Zufalls-Begegnung gleich";
+            NextText.Text = _director.IsBusy
+                ? "Zufallsmodus pausiert, solange eine Begegnung/ein Test läuft"
+                : s > 1 ? $"nächste Zufalls-Begegnung in ca. {s:0} s" : "nächste Zufalls-Begegnung gleich";
         }
         else NextText.Text = "";
 
@@ -291,9 +304,13 @@ public partial class MainWindow : Window
     private void TestMothership_Click(object sender, RoutedEventArgs e) =>
         _director?.TestLights(LightPattern.Mothership, 20, mothership: true);
 
+    private string? ResolveCommunityFolder() =>
+        LightPackageGenerator.DetectCommunityFolder()
+        ?? (_communityFolder.Length > 0 && Directory.Exists(_communityFolder) ? _communityFolder : null);
+
     private void UpdatePackageInfo()
     {
-        string? community = LightPackageGenerator.DetectCommunityFolder();
+        string? community = ResolveCommunityFolder();
         if (community == null)
         {
             PackageInfo.Text = "Community-Ordner nicht automatisch gefunden – beim Erzeugen wirst du danach gefragt.";
@@ -307,16 +324,24 @@ public partial class MainWindow : Window
 
     private void GeneratePackage_Click(object sender, RoutedEventArgs e)
     {
-        string? community = LightPackageGenerator.DetectCommunityFolder();
+        string? community = ResolveCommunityFolder();
+        bool picked = false;
         if (community == null)
         {
             var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "Community-Ordner von MSFS 2024 auswählen" };
             if (dlg.ShowDialog(this) != true) return;
             community = dlg.FolderName;
+            picked = true;
         }
         try
         {
             var r = LightPackageGenerator.Generate(community);
+            // Remember the picked folder, so the next update does not ask again.
+            if (picked)
+            {
+                _communityFolder = community;
+                SaveSettings();
+            }
             UpdatePackageInfo();
             Trace($"Licht-Paket erzeugt: {r.PackagePath} ({r.LightTitles.Count} Lichter, {r.OrbTitles.Count} Kugeln).");
             var answer = MessageBox.Show(this,
@@ -331,8 +356,11 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            string msg = ex.Message;
+            if (ex is IOException or UnauthorizedAccessException)
+                msg += "\n\nLäuft MSFS noch oder ist der Ordner im Explorer geöffnet? Dann beides schließen und erneut „Licht-Paket erzeugen“ klicken.";
             Trace($"Licht-Paket konnte nicht erzeugt werden: {ex.Message}");
-            MessageBox.Show(this, ex.Message, "Licht-Paket", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, msg, "Licht-Paket", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -345,6 +373,7 @@ public partial class MainWindow : Window
     private async Task RunEffect(DisruptionKind kind)
     {
         if (_disruptor == null || _director == null || _sim is not { IsConnected: true }) { Trace("Keine Verbindung zum Sim."); return; }
+        if (_director.IsEncounterActive) { Trace("Während einer Begegnung nicht möglich."); return; }
         if (_disruptor.IsActive) { Trace("Es läuft bereits ein Ausfall."); return; }
         _effects?.Dispose();
         var cts = _effects = new CancellationTokenSource();
@@ -438,6 +467,7 @@ public partial class MainWindow : Window
         _director.LightCount = (int)LightCountSlider.Value;
         _director.SpeedScale = SpeedSlider.Value;
         _director.MinDistanceMeters = MinDistSlider.Value;
+        _director.ApplyLiveTestTuning();
         _director.BeamTitle = BeamTitleBox.Text;
         _director.BeamCount = (int)BeamCountSlider.Value;
         _director.BeamHeight = BeamHeightSlider.Value;
@@ -458,7 +488,9 @@ public partial class MainWindow : Window
         MinDistSlider.Value = minDist;
         SpeedSlider.Value = speed;
         MultiPhaseChk.IsChecked = true;
-        Trace("Voreinstellung übernommen.");
+        Trace("Voreinstellung übernommen. Häufigkeit und Ausfallchance gelten auch für den Zufallsmodus; "
+              + "Anzahl, Abstand, Tempo und Dread gelten für Buttons und Tests (der Zufallsmodus würfelt sie je Begegnung neu). "
+              + "Mehrphasen-Modus ist an.");
     }
 
     private void PresetGentle_Click(object sender, RoutedEventArgs e) => ApplyPreset(0.5, 6, 14, 0.45, 0.2, 0.3, 2, 400, 0.5);
@@ -488,6 +520,7 @@ public partial class MainWindow : Window
     private void LoadSettings()
     {
         var s = SettingsStore.Load();
+        _communityFolder = s.CommunityFolder ?? "";
         FreqSlider.Value = s.Frequency;
         MinDurSlider.Value = s.MinDuration;
         MaxDurSlider.Value = s.MaxDuration;
@@ -537,11 +570,14 @@ public partial class MainWindow : Window
             Left = left;
             Top = top;
         }
+        if (s.WindowMaximized) WindowState = WindowState.Maximized;   // never restore "minimised"
     }
 
     private void SaveSettings()
     {
         var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+        if (bounds.IsEmpty) bounds = _lastNormalBounds;   // window already closed: reuse the last good value
+        else _lastNormalBounds = bounds;
         SettingsStore.Save(new AppSettings
         {
             Frequency = FreqSlider.Value,
@@ -571,12 +607,21 @@ public partial class MainWindow : Window
             MothershipTitle = MothershipTitleBox.Text,
             BeamTitle = BeamTitleBox.Text,
             JetTitle = JetTitleBox.Text,
+            CommunityFolder = _communityFolder,
             SelectedTab = Tabs.SelectedIndex,
             WindowLeft = bounds.IsEmpty ? null : bounds.Left,
             WindowTop = bounds.IsEmpty ? null : bounds.Top,
             WindowWidth = bounds.IsEmpty ? null : bounds.Width,
             WindowHeight = bounds.IsEmpty ? null : bounds.Height,
+            WindowMaximized = WindowState == WindowState.Maximized,
         });
+    }
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        // RestoreBounds is still valid here; in OnClosed it is Rect.Empty.
+        if (!e.Cancel) SaveSettings();
     }
 
     protected override void OnClosed(EventArgs e)

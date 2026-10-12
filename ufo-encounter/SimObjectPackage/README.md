@@ -38,5 +38,6 @@ selbst. Alle glTF-Dateien bestehen den Khronos glTF-Validator ohne Fehler.
    Danach lässt sich der Generator gezielt anpassen.
 
 Generierte Objekte werden automatisch als SimObject gespawnt. Alle anderen
-Titel, etwa ein übernommenes Flugzeug, werden als Flugzeug gespawnt. Eine
-Checkbox dafür gibt es nicht mehr.
+Titel, etwa ein übernommenes Flugzeug, werden als Flugzeug gespawnt. Andere
+einfache SimObjects, die keine Flugzeuge sind (z. B. ein Orb von flightsim.to),
+mit `obj:` vor dem Titel eintragen, z. B. `obj:Mein Orb`.

@@ -7,9 +7,9 @@
     <Grid Margin="10">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
+            <RowDefinition Height="*" MinHeight="200"/>
             <RowDefinition Height="6"/>
-            <RowDefinition Height="170" MinHeight="60"/>
+            <RowDefinition Height="170" MinHeight="60" MaxHeight="450"/>
         </Grid.RowDefinitions>
 
         <!-- ================= Always-visible status bar ================= -->
@@ -90,9 +90,12 @@
                                 </Grid>
                                 <WrapPanel Margin="0,6,0,0">
                                     <Label Content="Voreinstellung:"/>
-                                    <Button Content="Sanft" Click="PresetGentle_Click" ToolTip="Selten, eher fern, wenige Ausfälle."/>
-                                    <Button Content="Standard" Click="PresetStandard_Click" ToolTip="Ausgewogen."/>
-                                    <Button Content="Maximum" Click="PresetMax_Click" ToolTip="Häufig, nah, viele Ausfälle, hoher Dread."/>
+                                    <Button Content="Sanft" Click="PresetGentle_Click"
+                                            ToolTip="Zufallsmodus: selten, wenige Ausfälle. Für Szenario-Buttons und Tests außerdem: 2 Objekte, eher fern, wenig Dread."/>
+                                    <Button Content="Standard" Click="PresetStandard_Click"
+                                            ToolTip="Ausgewogen (Zufallsmodus und Buttons/Tests)."/>
+                                    <Button Content="Maximum" Click="PresetMax_Click"
+                                            ToolTip="Zufallsmodus: häufig, viele Ausfälle. Für Szenario-Buttons und Tests außerdem: 4 Objekte, nah, hoher Dread."/>
                                 </WrapPanel>
                             </StackPanel>
                         </GroupBox>
@@ -107,7 +110,7 @@
                         <GroupBox Header="OBJEKT-TITEL">
                             <StackPanel>
                                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="2,0,2,6"
-                                           Text="Welche SimObjects erscheinen. Am einfachsten: das gewünschte Flugzeug in MSFS laden und „Übernehmen“ klicken. Mehrere Titel mit Komma = Zufallsmix (z. B. verschiedene Farben)."/>
+                                           Text="Welche SimObjects erscheinen. Am einfachsten: das gewünschte Flugzeug in MSFS laden und „Übernehmen“ klicken. Mehrere Titel mit Komma = Zufallsmix (z. B. verschiedene Farben). Ein einfaches SimObject, das kein Flugzeug ist (z. B. ein Orb), mit „obj:“ davor eintragen, z. B. „obj:Mein Orb“."/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="160"/>
@@ -130,7 +133,7 @@
                                     <Button Grid.Row="2" Grid.Column="2" Content="Übernehmen" Click="UseCurrentForBeam_Click"/>
                                     <Label Grid.Row="3" Content="Jet (Verfolgung)"/>
                                     <TextBox Grid.Row="3" Grid.Column="1" x:Name="JetTitleBox" TextChanged="Setting_TextChanged"
-                                             ToolTip="Z. B. die mitgelieferte F/A-18: einmal laden und „Übernehmen“."/>
+                                             ToolTip="Z. B. die mitgelieferte F/A-18: einmal laden und „Übernehmen“. Leer = Mutterschiff- bzw. Licht-Titel."/>
                                     <Button Grid.Row="3" Grid.Column="2" Content="Übernehmen" Click="UseCurrentForJet_Click"/>
                                 </Grid>
                             </StackPanel>
@@ -245,7 +248,7 @@
                                     <Label Grid.Row="0" Content="Ausfall-Wahrscheinlichkeit"/>
                                     <Slider Grid.Row="0" Grid.Column="1" x:Name="DisruptChanceSlider" Minimum="0" Maximum="1" Value="0.75"
                                             ValueChanged="Slider_Changed" VerticalAlignment="Center"
-                                            ToolTip="Wie oft automatische Begegnungen überhaupt einen Ausfall haben (Szenario-Buttons immer)."/>
+                                            ToolTip="Wie oft zufällige Ausfälle auftreten. Szenario-Buttons lösen ihren eigenen Ausfall immer aus; zusätzliche Zufallsausfälle folgen diesem Wert."/>
                                     <TextBlock Grid.Row="0" Grid.Column="2" x:Name="DisruptChanceVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
                                     <Label Grid.Row="1" Content="Total-Blackout mindestens"/>
                                     <Slider Grid.Row="1" Grid.Column="1" x:Name="BlackMinSlider" Minimum="2" Maximum="60" Value="8"
@@ -257,7 +260,7 @@
                                     <TextBlock Grid.Row="2" Grid.Column="2" x:Name="BlackMaxVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
                                 </Grid>
                                 <WrapPanel Margin="0,6,0,0">
-                                    <Label Content="Testen:"/>
+                                    <Label Content="Testen:" ToolTip="Nur ohne laufende Begegnung."/>
                                     <Button Content="Total-Blackout 8 s" Click="TestBlackout_Click"/>
                                     <Button Content="Flackern 6 s" Click="TestStutter_Click"/>
                                     <Button Content="Flackern → Blackout" Click="TestStutterToBlackout_Click"/>
@@ -377,6 +380,12 @@
         <!-- ================= Log ================= -->
         <ListBox x:Name="LogList" Grid.Row="3" Background="{StaticResource LogBg}" Foreground="{StaticResource LogText}"
                  BorderBrush="{StaticResource Border}" FontFamily="Consolas" FontSize="12"
-                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
     </Grid>
 </Window>
