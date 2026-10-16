@@ -4,3 +4,7 @@ obj/
 .vs/
 sightings.csv
 settings.json
+
+# Holy-Grail jumpscare clip: embedded into the build when present, but not
+# published in this public repository (copyright unclear).
+src/Assets/jumpscare.mp3
