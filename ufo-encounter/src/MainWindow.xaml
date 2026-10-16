@@ -1,0 +1,409 @@
+<Window x:Class="UfoEncounter.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="UFO Encounter — MSFS 2024" Height="820" Width="1000" MinHeight="600" MinWidth="820"
+        Background="{StaticResource Bg}" Foreground="{StaticResource Text}"
+        FontFamily="Segoe UI" FontSize="13">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*" MinHeight="200"/>
+            <RowDefinition Height="6"/>
+            <RowDefinition Height="170" MinHeight="60" MaxHeight="450"/>
+        </Grid.RowDefinitions>
+
+        <!-- ================= Always-visible status bar ================= -->
+        <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
+                BorderThickness="1" Padding="10,6" Margin="0,0,0,8">
+            <StackPanel>
+                <DockPanel LastChildFill="True">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button x:Name="ConnectBtn" Content="Verbinden" Click="ConnectBtn_Click" MinWidth="90"
+                                ToolTip="Mit MSFS verbinden (passiert auch automatisch alle paar Sekunden)."/>
+                        <Button x:Name="NowBtn" Content="▶ Begegnung jetzt" Click="EncounterNow_Click"
+                                Style="{StaticResource AccentButton}"
+                                ToolTip="Eine völlig zufällige Begegnung sofort starten (Strg+Alt+U)."/>
+                        <CheckBox x:Name="RandomChk" Content="Zufallsmodus" VerticalAlignment="Center" Margin="10,0"
+                                  Checked="RandomChk_Changed" Unchecked="RandomChk_Changed"
+                                  ToolTip="Automatische Begegnungen in zufälligen Abständen (Strg+Alt+Z)."/>
+                        <Button x:Name="PanicBtn" Content="⛔ PANIK-STOP" Click="Panic_Click"
+                                Style="{StaticResource PanicButton}"
+                                ToolTip="Alles sofort beenden, Strom und Motor wiederherstellen (Strg+Alt+P – funktioniert auch im Vollbild)."/>
+                    </StackPanel>
+                    <WrapPanel VerticalAlignment="Center">
+                        <TextBlock Text="Sim: " Foreground="{StaticResource Muted}"/>
+                        <TextBlock x:Name="SimStatus" Text="warte auf MSFS …" Foreground="{StaticResource Warn}" Margin="0,0,16,0"/>
+                        <TextBlock Text="Höhe über Grund: " Foreground="{StaticResource Muted}"/>
+                        <TextBlock x:Name="AglText" Text="—" Margin="0,0,16,0"/>
+                        <TextBlock Text="Tageszeit: " Foreground="{StaticResource Muted}"/>
+                        <TextBlock x:Name="TodText" Text="—" Margin="0,0,16,0"/>
+                    </WrapPanel>
+                </DockPanel>
+                <DockPanel Margin="0,4,0,0">
+                    <TextBlock x:Name="NextText" DockPanel.Dock="Right" Foreground="{StaticResource Muted}"/>
+                    <TextBlock x:Name="EncounterText" Text="Bereit." FontSize="15" FontWeight="SemiBold"
+                               Foreground="{StaticResource Accent}" TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- ================= Tabs ================= -->
+        <TabControl x:Name="Tabs" Grid.Row="1" Background="{StaticResource Bg}" BorderBrush="{StaticResource Border}" Padding="0">
+
+            <!-- == Begegnungen == -->
+            <TabItem Header="Begegnungen">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4">
+                        <GroupBox Header="SZENARIEN">
+                            <StackPanel>
+                                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="2,0,2,6"
+                                           Text="Startet genau dieses Szenario – inklusive seines Ausfalls. Im Mehrphasen-Modus bildet es den Kern einer zufälligen Kette mit weiteren Mustern, danach fliegen die Objekte davon."/>
+                                <WrapPanel x:Name="ScenarioPanel"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="SPEZIAL">
+                            <WrapPanel>
+                                <Button Content="▶ Holy Grail (Tempus Fugit)" Click="TestHolyGrail_Click"
+                                        ToolTip="UFO tanzt → verschwindet → Strom und Motor fallen aus → Lichtstrahl über dir in totaler Stille → Systeme starten neu."/>
+                                <Button Content="▶ Jet-Verfolgung (JAL1628)" Click="TestJetChase_Click"
+                                        ToolTip="UFO voraus schießt davon, kurz darauf überholt dich ein Kampfjet (Jet-Titel im Tab „Objekte &amp; Lichter“)."/>
+                                <Button Content="▶ Mehrphasige Begegnung" Click="TestFullEncounter_Click"
+                                        ToolTip="Eine Wingman-Begegnung als vollständige Kette mit Wegflug."/>
+                            </WrapPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="ZUFALLSMODUS">
+                            <StackPanel>
+                                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}"
+                                           Text="Einschalten oben über „Zufallsmodus“. Pro Begegnung werden Szenario, Anzahl, Muster, Abstand, Tempo, Dread und Blink-Anteil neu gewürfelt. Deine Regler-Werte bleiben unverändert und gelten für Buttons und Tests."/>
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Label Grid.Column="0" Content="Begegnungen pro Minute (Ø)"/>
+                                    <Slider Grid.Column="1" x:Name="FreqSlider" Minimum="0.1" Maximum="6" Value="1"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" x:Name="FreqVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </Grid>
+                                <WrapPanel Margin="0,6,0,0">
+                                    <Label Content="Voreinstellung:"/>
+                                    <Button Content="Sanft" Click="PresetGentle_Click"
+                                            ToolTip="Zufallsmodus: selten, wenige Ausfälle. Für Szenario-Buttons und Tests außerdem: 2 Objekte, eher fern, wenig Dread, wenig Blinken."/>
+                                    <Button Content="Standard" Click="PresetStandard_Click"
+                                            ToolTip="Ausgewogen (Zufallsmodus und Buttons/Tests)."/>
+                                    <Button Content="Maximum" Click="PresetMax_Click"
+                                            ToolTip="Zufallsmodus: häufig, viele Ausfälle. Für Szenario-Buttons und Tests außerdem: 4 Objekte, nah, hoher Dread, mehr Blinken."/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- == Objekte & Lichter == -->
+            <TabItem Header="Objekte &amp; Lichter">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4">
+                        <GroupBox Header="OBJEKT-TITEL">
+                            <StackPanel>
+                                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="2,0,2,6"
+                                           Text="Welche SimObjects erscheinen. Für das Licht-Paket reicht ein Titel pro Farbe (z. B. UFOE_Licht_Rot_Ruhig) – die Lichtstile mischt das Programm selbst. Ein Flugzeug: in MSFS laden und „Übernehmen“ klicken. Mehrere Titel mit Komma = Zufallsmix. Ein einfaches SimObject, das kein Flugzeug ist (z. B. ein Orb), mit „obj:“ davor eintragen, z. B. „obj:Mein Orb“."/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="160"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    </Grid.RowDefinitions>
+                                    <Label Grid.Row="0" Content="Lichter / kleine UFOs"/>
+                                    <TextBox Grid.Row="0" Grid.Column="1" x:Name="LightTitleBox" TextChanged="Setting_TextChanged"/>
+                                    <Button Grid.Row="0" Grid.Column="2" Content="Übernehmen" Click="UseCurrentForLight_Click"
+                                            ToolTip="Titel des gerade in MSFS geladenen Flugzeugs eintragen."/>
+                                    <Label Grid.Row="1" Content="Mutterschiff"/>
+                                    <TextBox Grid.Row="1" Grid.Column="1" x:Name="MothershipTitleBox" TextChanged="Setting_TextChanged"/>
+                                    <Button Grid.Row="1" Grid.Column="2" Content="Übernehmen" Click="UseCurrentForMothership_Click"/>
+                                    <Label Grid.Row="2" Content="Lichtstrahl (Holy Grail)"/>
+                                    <TextBox Grid.Row="2" Grid.Column="1" x:Name="BeamTitleBox" TextChanged="Setting_TextChanged"
+                                             ToolTip="Leer = Mutterschiff- bzw. Licht-Titel."/>
+                                    <Button Grid.Row="2" Grid.Column="2" Content="Übernehmen" Click="UseCurrentForBeam_Click"/>
+                                    <Label Grid.Row="3" Content="Jet (Verfolgung)"/>
+                                    <TextBox Grid.Row="3" Grid.Column="1" x:Name="JetTitleBox" Text="FA18E SuperHornet" TextChanged="Setting_TextChanged"
+                                             ToolTip="Standard: „FA18E SuperHornet“ (die mitgelieferte F/A-18). Anderen Jet: in MSFS laden und „Übernehmen“. Leer = Mutterschiff- bzw. Licht-Titel (beim nächsten Start wieder der Standard)."/>
+                                    <Button Grid.Row="3" Grid.Column="2" Content="Übernehmen" Click="UseCurrentForJet_Click"/>
+                                </Grid>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="LICHT-PAKET (NUR LICHTER – OHNE 3D-MODELL)">
+                            <StackPanel>
+                                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="2,0,2,6"
+                                           Text="Erzeugt ein kleines Community-Paket mit reinen Lichtobjekten (7 Farben × ruhig / glimmend / funkelnd / pulsierend / blitzend), leuchtenden Kugeln für den Tag, hellen Kernen und kleinen Funken (Trabanten) – kein Blender nötig. Glimmen und Funkeln gehen nie ganz aus. Danach MSFS einmal neu starten."/>
+                                <WrapPanel>
+                                    <Button Content="Licht-Paket erzeugen / aktualisieren" Click="GeneratePackage_Click"
+                                            Style="{StaticResource AccentButton}"/>
+                                </WrapPanel>
+                                <TextBlock x:Name="PackageInfo" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="4,4,4,0"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="VERHALTEN">
+                            <StackPanel>
+                                <CheckBox x:Name="LightsChk" Content="Objekte aktiv" IsChecked="True"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+                                <CheckBox x:Name="AircraftLightsChk" IsChecked="True"
+                                          Content="Lichter von Flugzeug-Objekten einschalten (Positions-, Blitz-, Rundum- und Logolicht)"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+                                <CheckBox x:Name="AutoMixChk" IsChecked="True" Content="Lichtstile automatisch mischen"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"
+                                          ToolTip="Ein Titel pro Farbe aus dem Licht-Paket genügt: Das Programm wählt aus dem installierten Paket ein ruhiges Hauptlicht, glimmende, funkelnde oder blinkende Begleiter, Kerne und Funken. Aus = Titel genau wie eingetragen (dann ohne Trabanten)."/>
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    </Grid.RowDefinitions>
+                                    <Label Grid.Row="0" Content="Anzahl Objekte"/>
+                                    <Slider Grid.Row="0" Grid.Column="1" x:Name="LightCountSlider" Minimum="1" Maximum="6" Value="2"
+                                            IsSnapToTickEnabled="True" TickFrequency="1" ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="2" x:Name="LightCountVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="1" Content="Mindestabstand"/>
+                                    <Slider Grid.Row="1" Grid.Column="1" x:Name="MinDistSlider" Minimum="0" Maximum="2000" Value="0"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                            ToolTip="0 = aus. Hält Objekte auf Abstand (realistischer, weniger Nahbereich-Ruckeln)."/>
+                                    <TextBlock Grid.Row="1" Grid.Column="2" x:Name="MinDistVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="2" Content="Bewegungstempo"/>
+                                    <Slider Grid.Row="2" Grid.Column="1" x:Name="SpeedSlider" Minimum="0.2" Maximum="1.5" Value="0.6"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                            ToolTip="Niedriger = langsamere, ruhigere Bewegungen."/>
+                                    <TextBlock Grid.Row="2" Grid.Column="2" x:Name="SpeedVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="3" Content="Blink-Anteil"/>
+                                    <Slider Grid.Row="3" Grid.Column="1" x:Name="BlinkShareSlider" Minimum="0" Maximum="1" Value="0.3"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                            ToolTip="Wie viele Lichter neben dem ruhigen Hauptlicht blinken oder pulsieren. Meist glimmen oder funkeln sie nur – das geht nie ganz aus."/>
+                                    <TextBlock Grid.Row="3" Grid.Column="2" x:Name="BlinkShareVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="4" Content="Trabanten-Häufigkeit"/>
+                                    <Slider Grid.Row="4" Grid.Column="1" x:Name="SatChanceSlider" Minimum="0" Maximum="1" Value="0.35"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                            ToolTip="Wie oft bei einer Begegnung kleine Funken um ein großes Licht kreisen (nur mit Titeln aus dem Licht-Paket)."/>
+                                    <TextBlock Grid.Row="4" Grid.Column="2" x:Name="SatChanceVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="MUSTER TESTEN">
+                            <WrapPanel>
+                                <ComboBox x:Name="PatternCombo" Width="280" Margin="3" Foreground="Black" VerticalContentAlignment="Center"/>
+                                <Button Content="▶ Muster testen" Click="TestPattern_Click"
+                                        ToolTip="Zeigt das Muster ein paar Sekunden lang, danach fliegen die Objekte davon."/>
+                                <Button Content="▶ Mutterschiff testen" Click="TestMothership_Click"/>
+                                <CheckBox x:Name="TestSatChk" Content="mit Trabanten" VerticalAlignment="Center"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"
+                                          ToolTip="Muster-Test mit einem großen Licht, um das kleine Funken kreisen (nur mit Titeln aus dem Licht-Paket)."/>
+                                <Button Content="▶ Diagnose (Test-Objekte)" Click="RunDiagnostics_Click"
+                                        ToolTip="Zeigt die 5 Test-Objekte des Licht-Pakets nacheinander je ca. 20 s voraus (am besten nachts). Das Protokoll sagt jeweils, worauf du achten sollst – danach bitte melden, was du gesehen hast."/>
+                            </WrapPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="LICHTSTRAHL (HOLY GRAIL)">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition/><RowDefinition/>
+                                </Grid.RowDefinitions>
+                                <Label Grid.Row="0" Content="Strahl-Objekte"/>
+                                <Slider Grid.Row="0" Grid.Column="1" x:Name="BeamCountSlider" Minimum="1" Maximum="6" Value="3"
+                                        IsSnapToTickEnabled="True" TickFrequency="1" ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                        ToolTip="Mehr Objekte = breiter ausgeleuchtet."/>
+                                <TextBlock Grid.Row="0" Grid.Column="2" x:Name="BeamCountVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                <Label Grid.Row="1" Content="Höhe über dem Flugzeug"/>
+                                <Slider Grid.Row="1" Grid.Column="1" x:Name="BeamHeightSlider" Minimum="10" Maximum="80" Value="30"
+                                        ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Row="1" Grid.Column="2" x:Name="BeamHeightVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                            </Grid>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- == Ausfälle & Sound == -->
+            <TabItem Header="Ausfälle &amp; Sound">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4">
+                        <GroupBox Header="ELEKTRIK">
+                            <StackPanel>
+                                <WrapPanel>
+                                    <Label Content="Flugzeugtyp / Ausfall-Art:"/>
+                                    <ComboBox x:Name="ElecModeCombo" Width="440" Margin="3" Foreground="Black"
+                                              SelectionChanged="ElecMode_Changed" SelectedIndex="1">
+                                        <ComboBoxItem Content="Kolben (C172, DA62): nur Elektrik – Motor läuft weiter"/>
+                                        <ComboBoxItem Content="Kolben (C172, DA62): Elektrik + Motor aus"/>
+                                        <ComboBoxItem Content="Jet / Turbine: Komplett-Abschaltung (Triebwerke aus)"/>
+                                    </ComboBox>
+                                </WrapPanel>
+                                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="4,2,4,6"
+                                           Text="Gilt für Total-Blackouts. Der Holy Grail schaltet den Motor immer ab. Strom und Motor werden immer wiederhergestellt – auch bei PANIK-STOP oder beim Schließen des Programms."/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition/><RowDefinition/><RowDefinition/>
+                                    </Grid.RowDefinitions>
+                                    <Label Grid.Row="0" Content="Ausfall-Wahrscheinlichkeit"/>
+                                    <Slider Grid.Row="0" Grid.Column="1" x:Name="DisruptChanceSlider" Minimum="0" Maximum="1" Value="0.75"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                            ToolTip="Wie oft zufällige Ausfälle auftreten. Szenario-Buttons lösen ihren eigenen Ausfall immer aus; zusätzliche Zufallsausfälle folgen diesem Wert."/>
+                                    <TextBlock Grid.Row="0" Grid.Column="2" x:Name="DisruptChanceVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="1" Content="Total-Blackout mindestens"/>
+                                    <Slider Grid.Row="1" Grid.Column="1" x:Name="BlackMinSlider" Minimum="2" Maximum="60" Value="8"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="2" x:Name="BlackMinVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="2" Content="Total-Blackout höchstens"/>
+                                    <Slider Grid.Row="2" Grid.Column="1" x:Name="BlackMaxSlider" Minimum="2" Maximum="120" Value="25"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="2" x:Name="BlackMaxVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </Grid>
+                                <WrapPanel Margin="0,6,0,0">
+                                    <Label Content="Testen:" ToolTip="Nur ohne laufende Begegnung."/>
+                                    <Button Content="Total-Blackout 8 s" Click="TestBlackout_Click"/>
+                                    <Button Content="Flackern 6 s" Click="TestStutter_Click"/>
+                                    <Button Content="Flackern → Blackout" Click="TestStutterToBlackout_Click"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="SOUND">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition/><RowDefinition/>
+                                    </Grid.RowDefinitions>
+                                    <Label Grid.Row="0" Content="Intensität (Lautstärke, Flackern)"/>
+                                    <Slider Grid.Row="0" Grid.Column="1" x:Name="IntensitySlider" Minimum="0" Maximum="1" Value="0.6"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="2" x:Name="IntensityVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="1" Content="Whoosh-Lautstärke"/>
+                                    <Slider Grid.Row="1" Grid.Column="1" x:Name="WhooshVolSlider" Minimum="0" Maximum="1" Value="0.35"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="2" x:Name="WhooshVolVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </Grid>
+                                <CheckBox x:Name="WhooshChk" Content="Anflug-Whoosh abspielen" IsChecked="False"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+                                <WrapPanel>
+                                    <Button Content="Summen 6 s testen" Click="TestHum_Click"/>
+                                </WrapPanel>
+                                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="4,4,4,0"
+                                           Text="Jumpscare beim Holy Grail: der eingebaute Clip (wenn beim Bauen src/Assets/jumpscare.mp3 vorhanden war), sonst ein erzeugter Klang. Eigener Sound: Datei als jumpscare.mp3 (oder .wav/.ogg) neben die UfoEncounter.exe legen – sie hat Vorrang."/>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- == Einstellungen == -->
+            <TabItem Header="Einstellungen">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4">
+                        <GroupBox Header="ABLAUF">
+                            <StackPanel>
+                                <CheckBox x:Name="MultiPhaseChk" IsChecked="True"
+                                          Content="Mehrphasige Begegnungen (zufällige Muster-Ketten mit Wegflug)"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+                                <CheckBox x:Name="DayNightChk" IsChecked="True"
+                                          Content="Tag/Nacht-Logik im Zufallsmodus (nachts Lichter, tags Mutterschiff bevorzugen)"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+                                <CheckBox x:Name="RealismChk" IsChecked="True"
+                                          Content="Realismus-Lock (keine automatischen Begegnungen am Boden oder unter Min-Höhe)"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    </Grid.RowDefinitions>
+                                    <Label Grid.Row="0" Content="Dauer (Einzelphase) min"/>
+                                    <Slider Grid.Row="0" Grid.Column="1" x:Name="MinDurSlider" Minimum="1" Maximum="30" Value="4"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="2" x:Name="MinDurVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="1" Content="Dauer (Einzelphase) max"/>
+                                    <Slider Grid.Row="1" Grid.Column="1" x:Name="MaxDurSlider" Minimum="1" Maximum="60" Value="12"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="2" x:Name="MaxDurVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="2" Content="Dread (Anspannung)"/>
+                                    <Slider Grid.Row="2" Grid.Column="1" x:Name="DreadSlider" Minimum="0" Maximum="1" Value="0.4"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                            ToolTip="Wie nah, lang und heftig Begegnungen eskalieren – und wie oft Signature-Events kommen."/>
+                                    <TextBlock Grid.Row="2" Grid.Column="2" x:Name="DreadVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="3" Content="Min-Höhe über Grund"/>
+                                    <Slider Grid.Row="3" Grid.Column="1" x:Name="AglSlider" Minimum="0" Maximum="10000" Value="1500"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="3" Grid.Column="2" x:Name="AglVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="WIEDERHOLBARKEIT">
+                            <WrapPanel>
+                                <Label Content="Seed:"/>
+                                <TextBox x:Name="SeedBox" Width="120"/>
+                                <Button Content="Anwenden" Click="ApplySeed_Click"
+                                        ToolTip="Gleicher Seed = sehr ähnlicher Ablauf (gut zum Vorführen)."/>
+                                <Button Content="Zufällig" Click="RandomSeed_Click"/>
+                            </WrapPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="FENSTER, TASTEN &amp; DATEIEN">
+                            <StackPanel>
+                                <CheckBox x:Name="TopmostChk" Content="Fenster immer im Vordergrund"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+                                <TextBlock TextWrapping="Wrap" Margin="4,4,4,6"
+                                           Text="Tastenkürzel (global, funktionieren auch, wenn MSFS im Vollbild den Fokus hat):&#x0a;Strg+Alt+P = PANIK-STOP   ·   Strg+Alt+U = Begegnung jetzt   ·   Strg+Alt+Z = Zufallsmodus an/aus"/>
+                                <WrapPanel>
+                                    <Button Content="Ordner mit Sichtungen &amp; Einstellungen öffnen" Click="OpenDataFolder_Click"/>
+                                </WrapPanel>
+                                <TextBlock x:Name="DataPathText" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="4,2,4,0"/>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+
+        <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                      Background="{StaticResource Border}" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"
+                      ToolTip="Ziehen, um das Protokoll größer oder kleiner zu machen."/>
+
+        <!-- ================= Log ================= -->
+        <ListBox x:Name="LogList" Grid.Row="3" Background="{StaticResource LogBg}" Foreground="{StaticResource LogText}"
+                 BorderBrush="{StaticResource Border}" FontFamily="Consolas" FontSize="12"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </Grid>
+</Window>

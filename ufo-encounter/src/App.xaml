@@ -1,0 +1,133 @@
+<Application x:Class="UfoEncounter.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <SolidColorBrush x:Key="Bg" Color="#050D14"/>
+        <SolidColorBrush x:Key="Panel" Color="#0A1520"/>
+        <SolidColorBrush x:Key="Border" Color="#1A3050"/>
+        <SolidColorBrush x:Key="Text" Color="#CCDDEF"/>
+        <SolidColorBrush x:Key="Muted" Color="#6F8FAE"/>
+        <SolidColorBrush x:Key="Accent" Color="#4488CC"/>
+        <SolidColorBrush x:Key="Warn" Color="#FF9900"/>
+        <SolidColorBrush x:Key="LogBg" Color="#02060A"/>
+        <SolidColorBrush x:Key="LogText" Color="#88BBEE"/>
+
+        <!-- Text colour is inherited from the Window's Foreground (no global TextBlock
+             style: it would also recolour text inside ComboBox lists and tab headers). -->
+
+        <!-- Flat button look. The stock Windows template paints a light-blue hover
+             and a light-grey disabled background, which makes light text unreadable
+             on this dark theme. -->
+        <ControlTemplate x:Key="FlatButtonTemplate" TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3" SnapsToDevicePixels="True">
+                <Grid>
+                    <Border x:Name="Shade" Background="White" Opacity="0" CornerRadius="2"/>
+                    <ContentPresenter Margin="{TemplateBinding Padding}" RecognizesAccessKey="True" Focusable="False"
+                                      HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Shade" Property="Opacity" Value="0.08"/>
+                    <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter TargetName="Shade" Property="Opacity" Value="0.18"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+
+        <Style TargetType="Button">
+            <Setter Property="Template" Value="{StaticResource FlatButtonTemplate}"/>
+            <Setter Property="Background" Value="{StaticResource Panel}"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style x:Key="AccentButton" TargetType="Button">
+            <Setter Property="Template" Value="{StaticResource FlatButtonTemplate}"/>
+            <Setter Property="Background" Value="#10304A"/>
+            <Setter Property="Foreground" Value="#E6F2FF"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="12,5"/>
+            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style x:Key="PanicButton" TargetType="Button">
+            <Setter Property="Template" Value="{StaticResource FlatButtonTemplate}"/>
+            <Setter Property="Background" Value="#5A0A0A"/>
+            <Setter Property="Foreground" Value="#FFD6D6"/>
+            <Setter Property="BorderBrush" Value="#B02424"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="14,5"/>
+            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style TargetType="Label">
+            <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="Margin" Value="3"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="{StaticResource Panel}"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource Text}"/>
+            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Padding" Value="3,2"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <!-- Only the header is orange: a Foreground on the GroupBox itself would be
+             inherited by every text inside it. -->
+        <Style TargetType="GroupBox">
+            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="Margin" Value="6"/>
+            <Setter Property="Padding" Value="6"/>
+            <Setter Property="HeaderTemplate">
+                <Setter.Value>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" Foreground="{StaticResource Warn}" FontWeight="SemiBold"/>
+                    </DataTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- Header colour and weight sit on the header presenter only; set on the
+             TabItem they would be inherited by the whole tab page. -->
+        <Style TargetType="TabItem">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="TabBd" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
+                                BorderThickness="1,1,1,0" Margin="0,0,3,0" Padding="16,7" CornerRadius="3,3,0,0">
+                            <ContentPresenter x:Name="HeaderHost" ContentSource="Header" VerticalAlignment="Center"
+                                              TextElement.Foreground="{StaticResource Muted}" TextElement.FontWeight="SemiBold"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="TabBd" Property="Background" Value="{StaticResource Bg}"/>
+                                <Setter TargetName="HeaderHost" Property="TextElement.Foreground" Value="{StaticResource Warn}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TabBd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Application.Resources>
+</Application>
