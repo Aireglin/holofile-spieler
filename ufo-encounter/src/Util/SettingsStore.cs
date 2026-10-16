@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using UfoEncounter.Encounters;
 
 namespace UfoEncounter.Util;
 
@@ -44,7 +45,12 @@ public sealed class AppSettings
     public string BeamTitle { get; set; } = "";
     public int BeamCount { get; set; } = 3;
     public double BeamHeight { get; set; } = 30;
-    public string JetTitle { get; set; } = "";
+    /// <summary>Empty loads as the default (the stock F/A-18).</summary>
+    public string JetTitle { get; set; } = EncounterDirector.DefaultJetTitle;
+    public double BlinkShare { get; set; } = 0.3;
+    public double SatelliteChance { get; set; } = 0.35;
+    public bool AutoMix { get; set; } = true;
+    public bool TestWithSatellites { get; set; }
     /// <summary>Community folder picked by hand when auto-detection failed ("" = none).</summary>
     public string CommunityFolder { get; set; } = "";
 }

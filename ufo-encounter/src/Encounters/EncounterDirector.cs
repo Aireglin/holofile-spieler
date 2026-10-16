@@ -7,7 +7,8 @@ namespace UfoEncounter.Encounters;
 
 /// <summary>Per-encounter tuning. Random mode rolls a fresh one; manual triggers
 /// use the slider values. Never written back into the user's settings.</summary>
-public sealed record EncounterTuning(int LightCount, double Dread, double SpeedScale, double MinDistance);
+public sealed record EncounterTuning(int LightCount, double Dread, double SpeedScale, double MinDistance,
+    double BlinkShare);
 
 /// <summary>
 /// The "director": picks and times encounters, either on demand or autonomously
@@ -90,14 +91,29 @@ public sealed class EncounterDirector
     public double SpeedScale { get; set; } = 0.6;
     public double MinDistanceMeters { get; set; }
     public bool LightsEnabled { get; set; } = true;
+    /// <summary>0..1 — share of the lights besides the main light that blink.</summary>
+    public double BlinkShare { get; set; } = 0.3;
+    /// <summary>0..1 — chance that an encounter's main light gets orbiting sparks.</summary>
+    public double SatelliteChance { get; set; } = 0.35;
+    /// <summary>Pick light styles by role from the package (see <see cref="LightMix"/>);
+    /// off = titles exactly as listed.</summary>
+    public bool AutoMix { get; set; } = true;
+    /// <summary>Pattern tests show satellites (not for the mothership).</summary>
+    public bool TestWithSatellites { get; set; }
+    /// <summary>Titles of the installed light package (null = not found); the mix
+    /// only uses package titles that exist there or are listed.</summary>
+    public IReadOnlySet<string>? InstalledTitles { get; set; }
 
     // Holy Grail "beam" — bright object(s) hovering above the aircraft.
     public string BeamTitle { get; set; } = "";
     public int BeamCount { get; set; } = 3;
     public double BeamHeight { get; set; } = 30;
 
-    /// <summary>Aircraft title for the chasing jet (e.g. the stock F/A-18).</summary>
-    public string JetTitle { get; set; } = "";
+    /// <summary>MSFS 2024 title of the stock F/A-18 Super Hornet.</summary>
+    public const string DefaultJetTitle = "FA18E SuperHornet";
+
+    /// <summary>Aircraft title for the chasing jet (default: the stock F/A-18).</summary>
+    public string JetTitle { get; set; } = DefaultJetTitle;
 
     public bool IsRandomMode => _scheduler.IsEnabled;
     public bool IsEncounterActive { get; private set; }
@@ -135,13 +151,14 @@ public sealed class EncounterDirector
         };
     }
 
-    private EncounterTuning UserTuning => new(LightCount, Dread, SpeedScale, MinDistanceMeters);
+    private EncounterTuning UserTuning => new(LightCount, Dread, SpeedScale, MinDistanceMeters, BlinkShare);
 
     private EncounterTuning RandomTuning() => new(
         LightCount: _rng.Next(1, 6),                    // 1..5
         Dread: _rng.NextDouble(),                       // escalation + Holy-Grail odds
         SpeedScale: 0.4 + _rng.NextDouble() * 0.5,      // 0.4..0.9
-        MinDistance: 120 + _rng.NextDouble() * 700);    // 120..820 m
+        MinDistance: 120 + _rng.NextDouble() * 700,     // 120..820 m
+        BlinkShare: Math.Pow(_rng.NextDouble(), 1.6) * 0.6);   // 0..60 %, mostly calm
 
     /// <summary>Seed every random source for (more) repeatable runs.</summary>
     public void SetSeed(int? seed)
@@ -159,7 +176,7 @@ public sealed class EncounterDirector
         {
             ScheduleNext();
             _scheduler.Start();
-            _trace?.Invoke("Zufallsmodus AN – Szenario, Anzahl, Muster, Abstand, Tempo und Dread werden je Begegnung gewürfelt.");
+            _trace?.Invoke("Zufallsmodus AN – Szenario, Anzahl, Muster, Abstand, Tempo, Dread und Blink-Anteil werden je Begegnung gewürfelt.");
         }
         else
         {
@@ -287,6 +304,25 @@ public sealed class EncounterDirector
         ? FirstNonEmpty(MothershipTitle, LightObjectTitle)
         : FirstNonEmpty(LightObjectTitle, MothershipTitle);
 
+    private bool IsDay => (int)Math.Round(_sim.State.TimeOfDay) == 1;
+
+    /// <summary>Titles for one session (fixed at spawn): the role mix, or one plain
+    /// pick per object with <see cref="AutoMix"/> off. Satellites only for non-ship
+    /// sessions whose list allows them; then 1 main light + 3..6 sparks. Returns the
+    /// titles and how many of them (at the end) are satellites.</summary>
+    private (string[] Titles, int Satellites) SessionTitles(string csv, int count, bool ship,
+        bool satellites, double blinkShare, bool smallFollowers = false)
+    {
+        var entries = LightMix.Entries(csv);
+        count = ship ? 1 : Math.Clamp(count, 1, 8);
+        if (!AutoMix) return (LightMix.PickUniform(entries, count, _rng), 0);
+        bool orbit = satellites && !ship && LightMix.CanOrbit(entries, InstalledTitles);
+        int leaders = orbit ? 1 : count;
+        var titles = LightMix.Compose(entries, leaders, orbit ? Math.Clamp(count + 1, 3, 6) : 0,
+            blinkShare, IsDay, smallFollowers, InstalledTitles, _rng);
+        return (titles, Math.Max(0, titles.Length - leaders));
+    }
+
     // ---- Phases ----
 
     private sealed record Phase(
@@ -327,6 +363,10 @@ public sealed class EncounterDirector
 
         bool ship = scenario.Mothership || signature;
         string title = ResolveTitle(ship);
+        // Titles are fixed at spawn, so roles and satellites hold for the whole chain;
+        // Tic-Tac jumps are busy enough with fewer blinkers.
+        bool satellites = !ship && _rng.NextDouble() < SatelliteChance;
+        double blink = phases.Any(p => p.Light == LightPattern.TicTac) ? tu.BlinkShare / 2 : tu.BlinkShare;
         int session = -1;
         Task elec = Task.CompletedTask;
 
@@ -343,7 +383,10 @@ public sealed class EncounterDirector
                 if (LightsEnabled && ph.Light is LightPattern pat)
                 {
                     if (session < 0)
-                        session = _lights.Start(pat, ship ? 1 : tu.LightCount, ph.Dur, title, tu.SpeedScale, tu.MinDistance);
+                    {
+                        var (titles, sats) = SessionTitles(title, tu.LightCount, ship, satellites, blink);
+                        session = _lights.Start(pat, titles, sats, ph.Dur, tu.SpeedScale, tu.MinDistance);
+                    }
                     else
                         _lights.SetPattern(pat, ph.Dur);
                 }
@@ -613,7 +656,9 @@ public sealed class EncounterDirector
             _audio.SetDroneVolume(Math.Clamp(0.55 * (0.4 + 0.6 * Intensity), 0, 1));
             _audio.SetSubBassVolume(0.4);
             if (LightsEnabled)
-                _lights.Start(LightPattern.PopUp, Math.Max(1, LightCount), 8, ResolveTitle(false), SpeedScale, 0);
+                _lights.Start(LightPattern.PopUp,
+                    SessionTitles(ResolveTitle(false), Math.Max(1, LightCount), false, false, BlinkShare).Titles,
+                    0, 8, SpeedScale, 0);
             StatusChanged?.Invoke("Holy Grail · Das UFO tanzt");
             if (_rng.NextDouble() < 0.5)
                 elec = _disruptor.RunAsync(new DisruptionPlan
@@ -645,9 +690,12 @@ public sealed class EncounterDirector
             // 4) The beam appears overhead + the jumpscare. Total silence otherwise.
             _audio.PlayJumpscare(0.5);
             _lights.BeamHeight = BeamHeight;
+            // A bright centre with a ring of small sparks (with package titles).
             if (LightsEnabled)
-                _lights.Start(LightPattern.Beam, Math.Max(1, BeamCount), beamDur,
-                    FirstNonEmpty(BeamTitle, MothershipTitle, LightObjectTitle), SpeedScale, 0);
+                _lights.Start(LightPattern.Beam,
+                    SessionTitles(FirstNonEmpty(BeamTitle, MothershipTitle, LightObjectTitle), Math.Max(1, BeamCount),
+                        false, false, BlinkShare, smallFollowers: true).Titles,
+                    0, beamDur, SpeedScale, 0);
             StatusChanged?.Invoke("Holy Grail · Lichtstrahl");
             await Task.Delay(TimeSpan.FromSeconds(beamDur), ct);
 
@@ -691,9 +739,10 @@ public sealed class EncounterDirector
             _audio.SetDroneVolume(Math.Clamp(0.5 * (0.4 + 0.6 * Intensity), 0, 1));
             _audio.SetSubBassVolume(0.35);
 
-            // 1) UFO paces ahead.
+            // 1) UFO paces ahead: a single steady light.
             if (LightsEnabled)
-                _lights.Start(LightPattern.PopUp, 1, 7, ResolveTitle(true), SpeedScale, 0);
+                _lights.Start(LightPattern.PopUp, SessionTitles(ResolveTitle(true), 1, true, false, BlinkShare).Titles,
+                    0, 7, SpeedScale, 0);
             StatusChanged?.Invoke("Jet-Verfolgung · UFO voraus");
             await Task.Delay(TimeSpan.FromSeconds(5 + _rng.NextDouble() * 4), ct);
 
@@ -741,8 +790,12 @@ public sealed class EncounterDirector
 
         _testCts?.Cancel();
         var cts = _testCts = new CancellationTokenSource();
-        int session = _lights.Start(pattern, mothership ? 1 : LightCount, durationSec,
-            ResolveTitle(mothership), SpeedScale, MinDistanceMeters);
+        bool satellites = TestWithSatellites && !mothership;
+        var (titles, sats) = SessionTitles(ResolveTitle(mothership), LightCount, mothership, satellites, BlinkShare);
+        if (satellites && sats == 0)
+            _trace?.Invoke("Trabanten brauchen Titel aus dem Licht-Paket (UFOE_…) und „Lichtstile automatisch mischen“ "
+                           + "(bei älterem Licht-Paket: neu erzeugen und MSFS neu starten) – Test ohne Trabanten.");
+        int session = _lights.Start(pattern, titles, sats, durationSec, SpeedScale, MinDistanceMeters);
         if (session < 0)
         {
             if (_testCts == cts) _testCts = null;
@@ -762,6 +815,83 @@ public sealed class EncounterDirector
         {
             _lights.Stop(session);
             if (_testCts == cts) { _testCts = null; _testSession = -1; }
+            if (_testCts == null && !IsEncounterActive) StatusChanged?.Invoke("");
+        }
+    }
+
+    private const double DiagnosticSeconds = 20;
+
+    /// <summary>The package's test objects in the order they are shown, each with what
+    /// to look for. Answers settle node offsets, the flash_phase unit and whether a
+    /// flare-only light and the older light format are visible.</summary>
+    private static readonly (string Title, string Look)[] DiagnosticSteps =
+    {
+        (LightPackageGenerator.TitlePrefix + "Test_Versatz",
+            "Siehst du DREI Punkte (rot, grün, weiß – etwa 4 m auseinander) oder nur EINEN? Wenn drei: welche Farbe ist links, rechts, oben?"),
+        (LightPackageGenerator.TitlePrefix + "Test_Phase_Sek",
+            "Vier Farben (rot, grün, blau, weiß) in einem kleinen waagrechten Quadrat – von hinten wirken sie oft wie zwei Punkte. "
+            + "Laufen die Farben nacheinander durch (Lauflicht: rot → grün → blau → weiß), oder blinken alle gleichzeitig?"),
+        (LightPackageGenerator.TitlePrefix + "Test_Phase_Anteil",
+            "Wieder die vier Farben. Lauflicht (gleichmäßig nacheinander, ca. 1 s Abstand), schnell hintereinander, oder alle gleichzeitig? Anders als eben?"),
+        (LightPackageGenerator.TitlePrefix + "Test_FlareOnly",
+            "Siehst du einen weißen Lichtpunkt – ja oder nein?"),
+        (LightPackageGenerator.TitlePrefix + "Test_Macro_Weiss",
+            "Älteres Lichtformat (MSFS 2020): siehst du einen weißen Lichtpunkt – ja oder nein?"),
+    };
+
+    /// <summary>Night test of the package's diagnostic objects: one after another,
+    /// ~20 s each, ahead of the aircraft, with a log line saying what to look for.
+    /// Runs like a pattern test (cancelled by PANIK-STOP, an encounter or another
+    /// test); refused during an encounter.</summary>
+    public async Task RunDiagnosticsAsync()
+    {
+        if (IsEncounterActive) { _trace?.Invoke("Es läuft eine Begegnung – Diagnose übersprungen."); return; }
+        if (!LightsEnabled) { _trace?.Invoke("Objekte sind ausgeschaltet (Tab „Objekte & Lichter“)."); return; }
+        if (!_sim.IsConnected) { _trace?.Invoke("Diagnose: keine Verbindung zum Sim."); return; }
+        if (_sim.State.OnGround > 0.5) { _trace?.Invoke("Diagnose: bitte in der Luft starten (am Boden erscheinen keine Objekte)."); return; }
+        var installed = InstalledTitles;
+        // All or nothing: the closing question covers every step.
+        if (installed == null || DiagnosticSteps.Any(d => !installed.Contains(d.Title)))
+        {
+            _trace?.Invoke(installed == null
+                ? "Diagnose: Licht-Paket nicht gefunden. Erst im Tab „Objekte & Lichter“ auf „Licht-Paket erzeugen / aktualisieren“ klicken und MSFS neu starten."
+                : "Diagnose: Im installierten Licht-Paket fehlen die Test-Objekte (ältere Version). Bitte „Licht-Paket erzeugen / aktualisieren“ klicken und MSFS neu starten.");
+            return;
+        }
+        if (!TryBeginExclusive()) return;
+
+        var steps = DiagnosticSteps;
+        // _testSession stays -1: the live sliders must not move the test objects.
+        var cts = _testCts = new CancellationTokenSource();
+        int session = -1;
+        _trace?.Invoke($"Diagnose: {steps.Length} Test-Objekte nacheinander, je ca. {DiagnosticSeconds:0} s voraus (am besten nachts). "
+                       + "Merke dir bei jedem, was du siehst.");
+        try
+        {
+            for (int i = 0; i < steps.Length; i++)
+            {
+                var (title, look) = steps[i];
+                _trace?.Invoke($"Diagnose {i + 1}/{steps.Length} · {title}: {look}");
+                StatusChanged?.Invoke($"Diagnose {i + 1}/{steps.Length} · {title}");
+                session = _lights.Start(LightPattern.PaceAhead, new[] { title }, 0, DiagnosticSeconds, 0.3, 0);
+                if (session < 0) return;   // Start logged why (connection lost, on the ground)
+                await Task.Delay(TimeSpan.FromSeconds(DiagnosticSeconds), cts.Token);
+                _lights.Stop(session);
+                if (i < steps.Length - 1) await Task.Delay(TimeSpan.FromSeconds(2), cts.Token);
+            }
+            _trace?.Invoke("Diagnose fertig. Bitte melde kurz für jeden Test, was du gesehen hast: "
+                           + "1 Versatz – drei Punkte (welche Farbe wo?) oder einer · 2 Phase_Sek und 3 Phase_Anteil – "
+                           + "Lauflicht, schnell hintereinander oder gleichzeitig · 4 FlareOnly – Punkt ja/nein · "
+                           + "5 Macro – Punkt ja/nein. Ist ein Objekt gar nicht erschienen, auch das.");
+        }
+        catch (OperationCanceledException)
+        {
+            _trace?.Invoke("Diagnose abgebrochen.");
+        }
+        finally
+        {
+            if (session >= 0) _lights.Stop(session);
+            if (_testCts == cts) _testCts = null;
             if (_testCts == null && !IsEncounterActive) StatusChanged?.Invoke("");
         }
     }
@@ -790,6 +920,7 @@ public sealed class EncounterDirector
         _disruptor.AbortAndRestoreNow();
         _audioTimer.Stop();
         _audio.StopAll();
+        _audio.StopJumpscare();
         _lights.Stop();
         StatusChanged?.Invoke("");
         _trace?.Invoke("⛔ PANIK-STOP – Strom/Motor wiederhergestellt, Objekte entfernt, Ton aus, Zufallsmodus aus.");

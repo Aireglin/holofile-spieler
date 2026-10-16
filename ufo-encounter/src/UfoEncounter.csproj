@@ -47,6 +47,15 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Holy Grail jumpscare clip. Git-ignored, so it is embedded only when
+         present (AudioEngine falls back to the synthesized scare). Being inside
+         the assembly it also works with PublishSingleFile. -->
+    <None Remove="Assets\jumpscare.mp3" />
+    <EmbeddedResource Include="Assets\jumpscare.mp3" LogicalName="UfoEncounter.Assets.jumpscare.mp3"
+                      Condition="Exists('Assets\jumpscare.mp3')" />
+  </ItemGroup>
+
   <Target Name="WarnIfSdkMissing" BeforeTargets="Build">
     <Warning Condition="!Exists('$(MsfsSdkPath)\SimConnect SDK\lib\managed\Microsoft.FlightSimulator.SimConnect.dll')"
              Text="MSFS SDK not found at '$(MsfsSdkPath)'. Set MSFS2024_SDK or pass -p:MsfsSdkPath=... (see README)." />

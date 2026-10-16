@@ -76,7 +76,7 @@
                         <GroupBox Header="ZUFALLSMODUS">
                             <StackPanel>
                                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}"
-                                           Text="Einschalten oben über „Zufallsmodus“. Pro Begegnung werden Szenario, Anzahl, Muster, Abstand, Tempo und Dread neu gewürfelt. Deine Regler-Werte bleiben unverändert und gelten für Buttons und Tests."/>
+                                           Text="Einschalten oben über „Zufallsmodus“. Pro Begegnung werden Szenario, Anzahl, Muster, Abstand, Tempo, Dread und Blink-Anteil neu gewürfelt. Deine Regler-Werte bleiben unverändert und gelten für Buttons und Tests."/>
                                 <Grid Margin="0,6,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="210"/>
@@ -91,11 +91,11 @@
                                 <WrapPanel Margin="0,6,0,0">
                                     <Label Content="Voreinstellung:"/>
                                     <Button Content="Sanft" Click="PresetGentle_Click"
-                                            ToolTip="Zufallsmodus: selten, wenige Ausfälle. Für Szenario-Buttons und Tests außerdem: 2 Objekte, eher fern, wenig Dread."/>
+                                            ToolTip="Zufallsmodus: selten, wenige Ausfälle. Für Szenario-Buttons und Tests außerdem: 2 Objekte, eher fern, wenig Dread, wenig Blinken."/>
                                     <Button Content="Standard" Click="PresetStandard_Click"
                                             ToolTip="Ausgewogen (Zufallsmodus und Buttons/Tests)."/>
                                     <Button Content="Maximum" Click="PresetMax_Click"
-                                            ToolTip="Zufallsmodus: häufig, viele Ausfälle. Für Szenario-Buttons und Tests außerdem: 4 Objekte, nah, hoher Dread."/>
+                                            ToolTip="Zufallsmodus: häufig, viele Ausfälle. Für Szenario-Buttons und Tests außerdem: 4 Objekte, nah, hoher Dread, mehr Blinken."/>
                                 </WrapPanel>
                             </StackPanel>
                         </GroupBox>
@@ -110,7 +110,7 @@
                         <GroupBox Header="OBJEKT-TITEL">
                             <StackPanel>
                                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="2,0,2,6"
-                                           Text="Welche SimObjects erscheinen. Am einfachsten: das gewünschte Flugzeug in MSFS laden und „Übernehmen“ klicken. Mehrere Titel mit Komma = Zufallsmix (z. B. verschiedene Farben). Ein einfaches SimObject, das kein Flugzeug ist (z. B. ein Orb), mit „obj:“ davor eintragen, z. B. „obj:Mein Orb“."/>
+                                           Text="Welche SimObjects erscheinen. Für das Licht-Paket reicht ein Titel pro Farbe (z. B. UFOE_Licht_Rot_Ruhig) – die Lichtstile mischt das Programm selbst. Ein Flugzeug: in MSFS laden und „Übernehmen“ klicken. Mehrere Titel mit Komma = Zufallsmix. Ein einfaches SimObject, das kein Flugzeug ist (z. B. ein Orb), mit „obj:“ davor eintragen, z. B. „obj:Mein Orb“."/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="160"/>
@@ -132,8 +132,8 @@
                                              ToolTip="Leer = Mutterschiff- bzw. Licht-Titel."/>
                                     <Button Grid.Row="2" Grid.Column="2" Content="Übernehmen" Click="UseCurrentForBeam_Click"/>
                                     <Label Grid.Row="3" Content="Jet (Verfolgung)"/>
-                                    <TextBox Grid.Row="3" Grid.Column="1" x:Name="JetTitleBox" TextChanged="Setting_TextChanged"
-                                             ToolTip="Z. B. die mitgelieferte F/A-18: einmal laden und „Übernehmen“. Leer = Mutterschiff- bzw. Licht-Titel."/>
+                                    <TextBox Grid.Row="3" Grid.Column="1" x:Name="JetTitleBox" Text="FA18E SuperHornet" TextChanged="Setting_TextChanged"
+                                             ToolTip="Standard: „FA18E SuperHornet“ (die mitgelieferte F/A-18). Anderen Jet: in MSFS laden und „Übernehmen“. Leer = Mutterschiff- bzw. Licht-Titel (beim nächsten Start wieder der Standard)."/>
                                     <Button Grid.Row="3" Grid.Column="2" Content="Übernehmen" Click="UseCurrentForJet_Click"/>
                                 </Grid>
                             </StackPanel>
@@ -142,7 +142,7 @@
                         <GroupBox Header="LICHT-PAKET (NUR LICHTER – OHNE 3D-MODELL)">
                             <StackPanel>
                                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="2,0,2,6"
-                                           Text="Erzeugt ein kleines Community-Paket mit reinen Lichtobjekten (7 Farben × ruhig / pulsierend / blitzend) und leuchtenden Kugeln für den Tag – kein Blender nötig. Danach MSFS einmal neu starten."/>
+                                           Text="Erzeugt ein kleines Community-Paket mit reinen Lichtobjekten (7 Farben × ruhig / glimmend / funkelnd / pulsierend / blitzend), leuchtenden Kugeln für den Tag, hellen Kernen und kleinen Funken (Trabanten) – kein Blender nötig. Glimmen und Funkeln gehen nie ganz aus. Danach MSFS einmal neu starten."/>
                                 <WrapPanel>
                                     <Button Content="Licht-Paket erzeugen / aktualisieren" Click="GeneratePackage_Click"
                                             Style="{StaticResource AccentButton}"/>
@@ -158,6 +158,9 @@
                                 <CheckBox x:Name="AircraftLightsChk" IsChecked="True"
                                           Content="Lichter von Flugzeug-Objekten einschalten (Positions-, Blitz-, Rundum- und Logolicht)"
                                           Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+                                <CheckBox x:Name="AutoMixChk" IsChecked="True" Content="Lichtstile automatisch mischen"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"
+                                          ToolTip="Ein Titel pro Farbe aus dem Licht-Paket genügt: Das Programm wählt aus dem installierten Paket ein ruhiges Hauptlicht, glimmende, funkelnde oder blinkende Begleiter, Kerne und Funken. Aus = Titel genau wie eingetragen (dann ohne Trabanten)."/>
                                 <Grid Margin="0,6,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="210"/>
@@ -165,7 +168,7 @@
                                         <ColumnDefinition Width="80"/>
                                     </Grid.ColumnDefinitions>
                                     <Grid.RowDefinitions>
-                                        <RowDefinition/><RowDefinition/><RowDefinition/>
+                                        <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                     </Grid.RowDefinitions>
                                     <Label Grid.Row="0" Content="Anzahl Objekte"/>
                                     <Slider Grid.Row="0" Grid.Column="1" x:Name="LightCountSlider" Minimum="1" Maximum="6" Value="2"
@@ -181,6 +184,16 @@
                                             ValueChanged="Slider_Changed" VerticalAlignment="Center"
                                             ToolTip="Niedriger = langsamere, ruhigere Bewegungen."/>
                                     <TextBlock Grid.Row="2" Grid.Column="2" x:Name="SpeedVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="3" Content="Blink-Anteil"/>
+                                    <Slider Grid.Row="3" Grid.Column="1" x:Name="BlinkShareSlider" Minimum="0" Maximum="1" Value="0.3"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                            ToolTip="Wie viele Lichter neben dem ruhigen Hauptlicht blinken oder pulsieren. Meist glimmen oder funkeln sie nur – das geht nie ganz aus."/>
+                                    <TextBlock Grid.Row="3" Grid.Column="2" x:Name="BlinkShareVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Label Grid.Row="4" Content="Trabanten-Häufigkeit"/>
+                                    <Slider Grid.Row="4" Grid.Column="1" x:Name="SatChanceSlider" Minimum="0" Maximum="1" Value="0.35"
+                                            ValueChanged="Slider_Changed" VerticalAlignment="Center"
+                                            ToolTip="Wie oft bei einer Begegnung kleine Funken um ein großes Licht kreisen (nur mit Titeln aus dem Licht-Paket)."/>
+                                    <TextBlock Grid.Row="4" Grid.Column="2" x:Name="SatChanceVal" VerticalAlignment="Center" Margin="8,0,0,0"/>
                                 </Grid>
                             </StackPanel>
                         </GroupBox>
@@ -191,6 +204,11 @@
                                 <Button Content="▶ Muster testen" Click="TestPattern_Click"
                                         ToolTip="Zeigt das Muster ein paar Sekunden lang, danach fliegen die Objekte davon."/>
                                 <Button Content="▶ Mutterschiff testen" Click="TestMothership_Click"/>
+                                <CheckBox x:Name="TestSatChk" Content="mit Trabanten" VerticalAlignment="Center"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"
+                                          ToolTip="Muster-Test mit einem großen Licht, um das kleine Funken kreisen (nur mit Titeln aus dem Licht-Paket)."/>
+                                <Button Content="▶ Diagnose (Test-Objekte)" Click="RunDiagnostics_Click"
+                                        ToolTip="Zeigt die 5 Test-Objekte des Licht-Pakets nacheinander je ca. 20 s voraus (am besten nachts). Das Protokoll sagt jeweils, worauf du achten sollst – danach bitte melden, was du gesehen hast."/>
                             </WrapPanel>
                         </GroupBox>
 
@@ -294,7 +312,7 @@
                                     <Button Content="Summen 6 s testen" Click="TestHum_Click"/>
                                 </WrapPanel>
                                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="4,4,4,0"
-                                           Text="Eigener Jumpscare-Sound für den Holy Grail: Datei als jumpscare.mp3 (oder .wav/.ogg) neben die UfoEncounter.exe legen."/>
+                                           Text="Jumpscare beim Holy Grail: der eingebaute Clip (wenn beim Bauen src/Assets/jumpscare.mp3 vorhanden war), sonst ein erzeugter Klang. Eigener Sound: Datei als jumpscare.mp3 (oder .wav/.ogg) neben die UfoEncounter.exe legen – sie hat Vorrang."/>
                             </StackPanel>
                         </GroupBox>
                     </StackPanel>

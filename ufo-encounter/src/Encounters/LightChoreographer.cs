@@ -82,6 +82,10 @@ public static class PatternNames
 /// a high-resolution Stopwatch and smoothing is time-based, so motion stays even
 /// regardless of frame rate. Pattern switches cross-fade from where each object
 /// really is, so chained behaviours flow into each other.
+///
+/// Satellites ("Trabanten"): with a single leader, small mesh-less sparks orbit a
+/// virtual centre on tilted ellipses. The centre runs the normal pattern pipeline
+/// every frame (spawned or not) and the leader shows its pose.
 /// </summary>
 public sealed class LightChoreographer
 {
@@ -89,6 +93,11 @@ public sealed class LightChoreographer
     private const double FeetPerMeter = 3.28084;
     private const double SmoothTau = 0.25;      // s, smoothing time constant
     private const double BlendSeconds = 2.5;    // cross-fade length on pattern change
+    private const int MaxObjects = 8;
+    private const double SatMaxRadius = 60;     // m, orbit radius cap
+    private const double SatAxisMax = 1.4;      // largest semi-axis factor
+    private const double EmergeSeconds = 1.2;   // satellites slide out of the leader
+    private const double DipSeconds = 4.0;      // Beam ring dip: ~2 s down, ~2 s up
 
     /// <summary>Per-object randomness, rolled per pattern.</summary>
     private sealed class Vars
@@ -122,13 +131,35 @@ public sealed class LightChoreographer
         public double[] DepartFrom = new double[3];
         public double MinR;                        // eased minimum-distance radius
         public double NextJump;
+        public double DipStart = double.NegativeInfinity; // Beam ring: phase time of the last dip
+        public Orbit? Orbit;                       // satellites only
     }
+
+    /// <summary>A satellite's tilted elliptical path around the centre, rolled once per session.</summary>
+    private sealed class Orbit
+    {
+        public double A, B;          // semi-axis factors 0.6..1.4
+        public double CosI, SinI;    // inclination 15..70°
+        public double CosN, SinN;    // node angle 0..2π
+        public double Omega;         // ±0.5..2.0 rad/s on the scaled clock
+        public double Phase;
+    }
+
+    /// <summary>Per-frame values shared by every object's pose pipeline.</summary>
+    private readonly record struct Frame(double TPhase, double TSession, double BlendU, double BlendS,
+        double SmoothA, double RadiusA, bool Analytic);
 
     private readonly SimConnectClient _sim;
     private readonly Action<string>? _log;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
-    private readonly List<Light> _lights = new();
+    private readonly List<Light> _lights = new();   // spawned objects: leaders, then satellites
+    private readonly HashSet<string> _warnedTitles = new();
     private Random _rng;
+    private Light? _centre;     // virtual satellite centre, never spawned (null without satellites)
+    private int _leaders;
+    private double _nextDip = -1;
+    private int _lastDip = -1;
+    private int _faultSession = -1;
 
     private LightPattern _pattern;
     private double _durationSec;
@@ -143,6 +174,8 @@ public sealed class LightChoreographer
     private uint _nextSlot;
 
     public bool IsActive { get; private set; }
+    /// <summary>Satellites in the running session (0 if none).</summary>
+    public int SatelliteCount { get; private set; }
     /// <summary>Distance (m) of the nearest spawned object, or null if none.</summary>
     public double? NearestMeters { get; private set; }
     /// <summary>Height (metres) of the Beam cluster above the aircraft.</summary>
@@ -184,10 +217,29 @@ public sealed class LightChoreographer
     public int Start(LightPattern pattern, int count, double durationSec, string titles,
         double speedScale, double minDistance)
     {
-        if (!_sim.IsConnected) { _log?.Invoke("Objekte: keine Verbindung zum Sim."); return -1; }
         var list = (titles ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(t => !t.Equals(ObjectPrefix, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (list.Length == 0)
+        count = pattern == LightPattern.Mothership ? 1 : Math.Clamp(count, 1, MaxObjects);
+        var picked = new string[list.Length == 0 ? 0 : count];
+        for (int i = 0; i < picked.Length; i++) picked[i] = list[_rng.Next(list.Length)];
+        return Start(pattern, picked, 0, durationSec, speedScale, minDistance);
+    }
+
+    /// <summary>Spawn objects with fixed titles: the first entries are leaders, the
+    /// last <paramref name="satellites"/> entries orbit the leader as small sparks.
+    /// Satellites need exactly one leader, mesh-less UFOE_Licht_/UFOE_Funke_ titles and
+    /// a pattern other than Mothership/Beam; otherwise every object is a leader.
+    /// Entries may carry the "obj:" prefix. At most 8 objects. Returns the session id,
+    /// or -1 if nothing was started.</summary>
+    public int Start(LightPattern pattern, IReadOnlyList<string> titles, int satellites,
+        double durationSec, double speedScale, double minDistance)
+    {
+        if (!_sim.IsConnected) { _log?.Invoke("Objekte: keine Verbindung zum Sim."); return -1; }
+        titles ??= Array.Empty<string>();
+        int split = titles.Count - Math.Max(0, Math.Min(satellites, titles.Count));
+        var leaders = CleanTitles(titles.Take(split));
+        var sats = CleanTitles(titles.Skip(split));
+        if (leaders.Count + sats.Count == 0)
         {
             _log?.Invoke("Objekte: kein SimObject-Titel gesetzt (Tab „Objekte & Lichter“).");
             return -1;
@@ -195,46 +247,144 @@ public sealed class LightChoreographer
         var p = _sim.State;
         if (p.OnGround > 0.5) { _log?.Invoke("Objekte: übersprungen (Flugzeug steht am Boden)."); return -1; }
 
+        if (sats.Count > 0 && !(leaders.Count == 1 && SatellitesAllowed(pattern) && sats.All(IsSatelliteTitle)))
+        {
+            _log?.Invoke("Objekte: Trabanten hier nicht möglich (nur ein Hauptlicht, nur Licht-/Funken-Titel, "
+                         + "nicht bei Lichtstrahl/Mutterschiff) – alle fliegen normal mit.");
+            leaders.AddRange(sats);
+            sats.Clear();
+        }
+        int maxLeaders = pattern == LightPattern.Mothership ? 1 : MaxObjects;
+        if (leaders.Count > maxLeaders) leaders.RemoveRange(maxLeaders, leaders.Count - maxLeaders);
+        if (sats.Count > MaxObjects - leaders.Count) sats.RemoveRange(MaxObjects - leaders.Count, sats.Count - (MaxObjects - leaders.Count));
+
         Stop();
         _session++;
         _pattern = pattern;
-        _durationSec = Math.Max(1, durationSec);
-        _speedScale = Math.Clamp(speedScale, 0.1, 2.0);
-        _minDistance = Math.Max(0, minDistance);
+        _durationSec = Math.Max(1, Finite(durationSec, 1));
+        _speedScale = Math.Clamp(Finite(speedScale, 0.6), 0.1, 2.0);
+        _minDistance = Math.Max(0, Finite(minDistance, 0));
         _tsBias = 0;
         double now = Now;
         _sessionStart = _phaseStart = now;
         _blendDur = 0;
         _lastFrame = -1;
+        _leaders = leaders.Count;   // set before spawning: OffsetFor spaces by it
+        SatelliteCount = sats.Count;
+        _nextDip = -1;
+        _lastDip = -1;
+        _warnedTitles.Clear();
         IsActive = true;
 
-        count = pattern == LightPattern.Mothership ? 1 : Math.Clamp(count, 1, 8);
-        for (uint i = 0; i < count; i++)
+        if (sats.Count > 0)
         {
-            string raw = list[_rng.Next(list.Length)];
-            bool forceObject = raw.StartsWith(ObjectPrefix, StringComparison.OrdinalIgnoreCase);
-            string title = forceObject ? raw[ObjectPrefix.Length..].Trim() : raw;
-            var l = new Light
-            {
-                Index = i,
-                Slot = _nextSlot++ % SimConnectClient.SpawnSlots,
-                Title = title,
-                AsAircraft = !forceObject && IsAircraftTitle(title),
-                SpawnedAt = now,
-                V = RollVars(),
-            };
-            Seed(l);
-            // Spawn exactly where the pattern starts — no teleport on the first frame.
-            var off = OffsetFor(l, 0, 0);
-            Array.Copy(off, l.Smoothed, 3);
-            l.MinR = IgnoresMinDistance(pattern) ? 0 : _minDistance;
-            ApplyMinRadius(l, off);
-            _lights.Add(l);
-            _sim.SpawnObject(title, ComposePose(p, l.LastSent, 0, l.V), l.Slot, l.AsAircraft);
+            _centre = new Light { V = RollVars() };
+            Seed(_centre);
+            PlaceAtStart(_centre, true);
         }
-        _log?.Invoke($"Objekte: {count}× erzeugt – {PatternNames.German(pattern)}.");
+        for (int i = 0; i < leaders.Count; i++)
+        {
+            var l = NewLight(leaders[i], (uint)i, now);
+            if (_centre != null)
+            {
+                l.V = _centre.V;   // the leader shows the centre's pose
+                Array.Copy(_centre.LastSent, l.LastSent, 3);
+            }
+            else
+            {
+                l.V = RollVars();
+                Seed(l);
+                PlaceAtStart(l, false);
+            }
+            Spawn(l, p);
+        }
+        if (_centre != null)
+        {
+            var orbits = new Orbit[sats.Count];
+            for (int k = 0; k < orbits.Length; k++) orbits[k] = RollOrbit(k, orbits.Length);
+            // Some always counter-rotate.
+            if (orbits.Length > 1 && orbits.All(o => Math.Sign(o.Omega) == Math.Sign(orbits[0].Omega)))
+            {
+                var o = orbits[_rng.Next(orbits.Length)];
+                o.Omega = -o.Omega;
+            }
+            for (int k = 0; k < orbits.Length; k++)
+            {
+                var s = NewLight(sats[k], (uint)(leaders.Count + k), now);
+                s.V = RollVars();
+                s.Orbit = orbits[k];
+                // Spawn inside the leader; the emerge ramp slides it out once assigned.
+                Array.Copy(_centre.LastSent, s.LastSent, 3);
+                Spawn(s, p);
+            }
+        }
+        _log?.Invoke(sats.Count > 0
+            ? $"Objekte: {leaders.Count}× erzeugt + {sats.Count} Trabanten – {PatternNames.German(pattern)}."
+            : $"Objekte: {leaders.Count}× erzeugt – {PatternNames.German(pattern)}.");
         PatternChanged?.Invoke(pattern);
         return _session;
+    }
+
+    private static List<string> CleanTitles(IEnumerable<string?> raw) =>
+        raw.Select(t => (t ?? "").Trim())
+           .Where(t => t.Length > 0 && !t.Equals(ObjectPrefix, StringComparison.OrdinalIgnoreCase))
+           .ToList();
+
+    /// <summary>Only mesh-less package lights may orbit: aircraft and orbs would overlap.</summary>
+    private static bool IsSatelliteTitle(string raw)
+    {
+        string t = raw.StartsWith(ObjectPrefix, StringComparison.OrdinalIgnoreCase) ? raw[ObjectPrefix.Length..].Trim() : raw;
+        return t.StartsWith(LightPackageGenerator.TitlePrefix + "Licht_", StringComparison.OrdinalIgnoreCase)
+            || t.StartsWith(LightPackageGenerator.TitlePrefix + "Funke_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool SatellitesAllowed(LightPattern p) =>
+        p is not (LightPattern.Mothership or LightPattern.Beam);
+
+    private Light NewLight(string raw, uint index, double now)
+    {
+        bool forceObject = raw.StartsWith(ObjectPrefix, StringComparison.OrdinalIgnoreCase);
+        string title = forceObject ? raw[ObjectPrefix.Length..].Trim() : raw;
+        return new Light
+        {
+            Index = index,
+            Slot = _nextSlot++ % SimConnectClient.SpawnSlots,
+            Title = title,
+            AsAircraft = !forceObject && IsAircraftTitle(title),
+            SpawnedAt = now,
+        };
+    }
+
+    /// <summary>Spawn exactly where the pattern starts — no teleport on the first frame.</summary>
+    private void PlaceAtStart(Light l, bool centre)
+    {
+        var off = OffsetFor(l, 0, 0);
+        if (!IsFinite(off)) off = new double[] { 0, 300, 30 };
+        Array.Copy(off, l.Smoothed, 3);
+        l.MinR = MinRTarget(centre);
+        ApplyMinRadius(l, off);
+    }
+
+    private void Spawn(Light l, PlaneState p)
+    {
+        _lights.Add(l);
+        _sim.SpawnObject(l.Title, ComposePose(p, l.LastSent, 0, l.V), l.Slot, l.AsAircraft);
+    }
+
+    private Orbit RollOrbit(int k, int count)
+    {
+        double incl = (15 + 55 * _rng.NextDouble()) * Math.PI / 180;
+        double node = _rng.NextDouble() * 2 * Math.PI;
+        double spacing = 2 * Math.PI / Math.Max(1, count);
+        return new Orbit
+        {
+            A = 0.6 + 0.8 * _rng.NextDouble(),
+            B = 0.6 + 0.8 * _rng.NextDouble(),
+            CosI = Math.Cos(incl), SinI = Math.Sin(incl),
+            CosN = Math.Cos(node), SinN = Math.Sin(node),
+            Omega = (0.5 + 1.5 * _rng.NextDouble()) * (_rng.Next(2) == 0 ? -1 : 1),
+            Phase = k * spacing + (_rng.NextDouble() * 2 - 1) * 0.25 * spacing,
+        };
     }
 
     /// <summary>Live slider tuning for a running pattern test; ignored for any other
@@ -243,13 +393,13 @@ public sealed class LightChoreographer
     public void UpdateLiveTuning(int session, double speedScale, double minDistance)
     {
         if (!IsActive || session != _session) return;
-        double s = Math.Clamp(speedScale, 0.1, 2.0);
+        double s = Math.Clamp(Finite(speedScale, _speedScale), 0.1, 2.0);
         if (s != _speedScale)
         {
             _tsBias += (Now - _sessionStart) * (_speedScale - s);
             _speedScale = s;
         }
-        _minDistance = Math.Max(0, minDistance);
+        _minDistance = Math.Max(0, Finite(minDistance, _minDistance));
     }
 
     /// <summary>Switch the motion pattern live, keeping the spawned objects. Each
@@ -258,17 +408,23 @@ public sealed class LightChoreographer
     public void SetPattern(LightPattern pattern, double durationSec)
     {
         if (!IsActive) return;
-        _durationSec = Math.Max(1, durationSec);
+        _durationSec = Math.Max(1, Finite(durationSec, _durationSec));
         if (pattern == _pattern) return;   // e.g. Mothership → Mothership: keep drifting
 
         double now = Now;
-        foreach (var l in _lights)
+        foreach (var l in Drivers())
         {
             Array.Copy(l.LastSent, l.From, 3);
             l.V = RollVars();
+            l.DipStart = double.NegativeInfinity;
             if (pattern == LightPattern.TicTac) JumpTicTac(l, 0);
             else if (pattern == LightPattern.Mothership) JumpMothership(l);
         }
+        // Satellites keep their orbits; the leader keeps showing the centre.
+        if (_centre != null)
+            foreach (var l in _lights)
+                if (l.Orbit == null) l.V = _centre.V;
+        _nextDip = -1;
         _blendStart = now;
         _blendDur = pattern == LightPattern.TicTac ? 0 : BlendSeconds;
         _pattern = pattern;
@@ -283,7 +439,8 @@ public sealed class LightChoreographer
     {
         if (!IsActive || (session >= 0 && session != _session)) return;
         _departAccel = majestic ? 55 : 230;
-        foreach (var l in _lights)
+        // With satellites only the centre departs; leader and sparks ride along.
+        foreach (var l in Drivers())
             Array.Copy(l.LastSent, l.DepartFrom, 3);
         _pattern = LightPattern.Depart;
         _phaseStart = Now;
@@ -299,19 +456,30 @@ public sealed class LightChoreographer
         foreach (var l in _lights)
             if (l.ObjectId is uint id) _sim.RemoveObject(id, l.Slot);
         // Spawns still in flight are removed when their assignment arrives (no match).
-        _lights.Clear();
-        IsActive = false;
-        NearestMeters = null;
+        ClearSession();
         _lastFrame = -1;
     }
 
     private void OnDisconnected()
     {
         // The sim dropped all objects; don't keep writing to dead ids.
+        ClearSession();
+    }
+
+    private void ClearSession()
+    {
         _lights.Clear();
+        _centre = null;
+        _leaders = 0;
+        SatelliteCount = 0;
         IsActive = false;
         NearestMeters = null;
     }
+
+    /// <summary>Objects that run the pattern pipeline: the virtual centre when there
+    /// are satellites, otherwise every object.</summary>
+    private IEnumerable<Light> Drivers() =>
+        _centre != null ? new[] { _centre } : _lights;
 
     private Vars RollVars() => new()
     {
@@ -359,82 +527,188 @@ public sealed class LightChoreographer
     private void OnSimFrame(PlaneState p)
     {
         if (!IsActive || _lights.Count == 0) return;
+        // SimConnectClient only catches COMException: anything escaping here would
+        // crash the app mid-encounter (possibly with the power cut).
+        try { Step(p); }
+        catch (Exception ex) { ReportFault(ex); }
+    }
 
+    private void Step(PlaneState p)
+    {
         double now = Now;
         double dt = _lastFrame < 0 ? 1 / 30.0 : Math.Clamp(now - _lastFrame, 0.0, 0.1);
         _lastFrame = now;
         double tSession = now - _sessionStart;
         double tPhase = now - _phaseStart;
         double blendU = _blendDur > 0 ? Math.Clamp((now - _blendStart) / _blendDur, 0, 1) : 1;
-        double blendS = blendU * blendU * (3 - 2 * blendU);
-        double smoothA = 1 - Math.Exp(-dt / SmoothTau);
-        double radiusA = 1 - Math.Exp(-dt / 0.8);
-        bool analytic = IsAnalytic(_pattern);
-        double targetR = IgnoresMinDistance(_pattern) ? 0 : _minDistance;
+        var f = new Frame(tPhase, tSession, blendU, blendU * blendU * (3 - 2 * blendU),
+            1 - Math.Exp(-dt / SmoothTau), 1 - Math.Exp(-dt / 0.8), IsAnalytic(_pattern));
+        double targetR = MinRTarget(false);
         double? nearest = null;
+
+        if (_pattern == LightPattern.Beam && _leaders >= 2) ScheduleBeamDip(tPhase);
+
+        // The centre moves every frame, spawned or not: satellites never anchor to a stale pose.
+        var c = _centre;
+        double satR = 0, tScaled = tSession * _speedScale + _tsBias;
+        if (c != null)
+        {
+            Advance(c, f, MinRTarget(true));
+            satR = OrbitRadius(Norm(c.LastSent));
+        }
 
         foreach (var l in _lights)
         {
-            if (l.ObjectId is not uint id)
+            try
             {
-                if (!l.Warned && now - l.SpawnedAt > 5)
+                if (l.ObjectId is not uint id)
                 {
-                    l.Warned = true;
-                    _log?.Invoke($"⚠ Objekt „{l.Title}“ ist nach 5 s nicht erschienen. Titel exakt prüfen "
-                                 + "(oder per „Übernehmen“ holen); bei Paket-Objekten MSFS neu starten."
-                                 + (l.AsAircraft ? " Ist es kein Flugzeug (z. B. ein Orb-Objekt), „obj:“ vor den Titel schreiben." : ""));
+                    if (!l.Warned && now - l.SpawnedAt > 5)
+                    {
+                        l.Warned = true;
+                        if (_warnedTitles.Add(l.Title))
+                            _log?.Invoke($"⚠ Objekt „{l.Title}“ ist nach 5 s nicht erschienen. Titel exakt prüfen "
+                                         + "(oder per „Übernehmen“ holen); bei Paket-Objekten MSFS neu starten."
+                                         + (l.AsAircraft ? " Ist es kein Flugzeug (z. B. ein Orb-Objekt), „obj:“ vor den Titel schreiben." : ""));
+                    }
+                    continue;
                 }
-                continue;
-            }
 
-            double since = now - l.AssignedAt;
-            // Re-assert the freeze a few times during the object's first second.
-            if (since <= 1.0)
-            {
-                int step = (int)(since / 0.2);
-                if (step > l.FreezeSteps) { l.FreezeSteps = step; _sim.FreezeObject(id); }
-            }
-            // Switch aircraft lights on once the object has settled (twice, for robustness).
-            if (ForceAircraftLights && l.AsAircraft &&
-                ((l.LightsAsserted == 0 && since > 0.8) || (l.LightsAsserted == 1 && since > 2.5)))
-            {
-                _sim.SetObjectLights(id, true);
-                l.LightsAsserted++;
-            }
-
-            var raw = OffsetFor(l, tPhase, tSession);
-            double[] off;
-            if (analytic)
-            {
-                off = raw;
-                Array.Copy(raw, l.Smoothed, 3);    // keep the filter in sync for later switches
-            }
-            else
-            {
-                for (int i = 0; i < 3; i++) l.Smoothed[i] += (raw[i] - l.Smoothed[i]) * smoothA;
-                off = l.Smoothed;
-            }
-
-            if (blendU < 1)
-            {
-                off = new[]
+                double since = now - l.AssignedAt;
+                // Re-assert the freeze a few times during the object's first second.
+                if (since <= 1.0)
                 {
-                    Lerp(l.From[0], off[0], blendS),
-                    Lerp(l.From[1], off[1], blendS),
-                    Lerp(l.From[2], off[2], blendS),
-                };
+                    int step = (int)(since / 0.2);
+                    if (step > l.FreezeSteps) { l.FreezeSteps = step; _sim.FreezeObject(id); }
+                }
+                // Switch aircraft lights on once the object has settled (twice, for robustness).
+                if (ForceAircraftLights && l.AsAircraft &&
+                    ((l.LightsAsserted == 0 && since > 0.8) || (l.LightsAsserted == 1 && since > 2.5)))
+                {
+                    _sim.SetObjectLights(id, true);
+                    l.LightsAsserted++;
+                }
+
+                if (l.Orbit is Orbit o)
+                {
+                    if (c == null) continue;
+                    PlaceSatellite(l, o, c.LastSent, satR * SmoothStep(since / EmergeSeconds), tScaled);
+                }
+                else if (c != null) Array.Copy(c.LastSent, l.LastSent, 3);
+                else if (!Advance(l, f, targetR)) continue;
+
+                // Never send a broken pose; skip this frame for the object.
+                if (!IsFinite(l.LastSent)) continue;
+                var pose = ComposePose(p, l.LastSent, tSession, l.V);
+                if (!IsFinite(pose)) continue;
+
+                double d = Norm(l.LastSent);
+                if (nearest is null || d < nearest) nearest = d;
+
+                _sim.MoveObject(id, pose);
+                if (l.AsAircraft) _sim.ZeroVelocity(id);
             }
-
-            l.MinR += (targetR - l.MinR) * radiusA;
-            ApplyMinRadius(l, off);
-
-            double d = Math.Sqrt(l.LastSent[0] * l.LastSent[0] + l.LastSent[1] * l.LastSent[1] + l.LastSent[2] * l.LastSent[2]);
-            if (nearest is null || d < nearest) nearest = d;
-
-            _sim.MoveObject(id, ComposePose(p, l.LastSent, tSession, l.V));
-            if (l.AsAircraft) _sim.ZeroVelocity(id);
+            catch (Exception ex) { ReportFault(ex); }
         }
         NearestMeters = nearest;
+    }
+
+    /// <summary>One step of the pose pipeline (pattern offset → smoothing → cross-fade
+    /// → eased minimum radius), result in LastSent. Shared by the leaders and the
+    /// satellite centre. False (state untouched) if the pattern gave a non-finite offset.</summary>
+    private bool Advance(Light l, in Frame f, double targetR)
+    {
+        var raw = OffsetFor(l, f.TPhase, f.TSession);
+        if (!IsFinite(raw)) return false;
+        double[] off;
+        if (f.Analytic)
+        {
+            off = raw;
+            Array.Copy(raw, l.Smoothed, 3);    // keep the filter in sync for later switches
+        }
+        else
+        {
+            for (int i = 0; i < 3; i++) l.Smoothed[i] += (raw[i] - l.Smoothed[i]) * f.SmoothA;
+            off = l.Smoothed;
+        }
+
+        if (f.BlendU < 1)
+        {
+            off = new[]
+            {
+                Lerp(l.From[0], off[0], f.BlendS),
+                Lerp(l.From[1], off[1], f.BlendS),
+                Lerp(l.From[2], off[2], f.BlendS),
+            };
+        }
+
+        l.MinR += (targetR - l.MinR) * f.RadiusA;
+        ApplyMinRadius(l, off);
+        return true;
+    }
+
+    /// <summary>Satellite = centre + radius · Rot(node, incl) · (a cos θ, b sin θ, 0),
+    /// θ on the scaled session clock (continuous across live speed changes). No
+    /// smoothing and no minimum radius: the centre keeps the margin instead.</summary>
+    private static void PlaceSatellite(Light s, Orbit o, double[] centre, double radius, double tScaled)
+    {
+        double th = o.Omega * tScaled + o.Phase;
+        double x = o.A * Math.Cos(th), y = o.B * Math.Sin(th);
+        double y1 = y * o.CosI, z1 = y * o.SinI;          // tilt about the right axis
+        s.LastSent[0] = centre[0] + radius * (x * o.CosN - y1 * o.SinN);   // turn about up
+        s.LastSent[1] = centre[1] + radius * (x * o.SinN + y1 * o.CosN);
+        s.LastSent[2] = centre[2] + radius * z1;
+    }
+
+    /// <summary>Orbit radius (m) for a centre <paramref name="d"/> metres away: about
+    /// 7 % of the distance, 5..60 m.</summary>
+    private static double OrbitRadius(double d) =>
+        Math.Min(Math.Max(0.07 * d, 5), Math.Max(5, Math.Min(SatMaxRadius, 0.4 * d)));
+
+    /// <summary>Smallest centre distance that keeps every satellite outside
+    /// <paramref name="minDist"/>: the fixed point of D = minDist + reach(D), iterated
+    /// down from the worst case (each step stays on the safe side).</summary>
+    private static double CentreMinR(double minDist)
+    {
+        double r = minDist + SatAxisMax * SatMaxRadius;
+        for (int i = 0; i < 4; i++) r = minDist + SatAxisMax * OrbitRadius(r);
+        return r;
+    }
+
+    private double MinRTarget(bool centre) =>
+        IgnoresMinDistance(_pattern) ? 0 : centre ? CentreMinR(_minDistance) : _minDistance;
+
+    /// <summary>Every 4–9 s one ring light of the Beam dips toward the canopy (never
+    /// the same one twice in a row). Only mesh-less package lights dip; aircraft
+    /// and orbs in the ring keep their height.</summary>
+    private void ScheduleBeamDip(double tp)
+    {
+        if (_nextDip < 0) { _nextDip = tp + 2 + 3 * _rng.NextDouble(); return; }
+        if (tp < _nextDip) return;
+        int ring = _leaders - 1;                   // ring lights are indices 1..ring
+        int pick = 1 + _rng.Next(ring);
+        if (pick == _lastDip && ring > 1) pick = 1 + pick % ring;
+        _lastDip = pick;
+        foreach (var l in _lights)
+            if (l.Index == pick && l.Orbit == null && IsSatelliteTitle(l.Title)) l.DipStart = tp;
+        _nextDip = tp + 4 + 5 * _rng.NextDouble();
+    }
+
+    /// <summary>Dip depth 0..1: sin² over <see cref="DipSeconds"/>, so it eases down and back up.</summary>
+    private static double DipProfile(double since)
+    {
+        double u = since / DipSeconds;
+        if (!(u > 0 && u < 1)) return 0;
+        double s = Math.Sin(Math.PI * u);
+        return s * s;
+    }
+
+    private void ReportFault(Exception ex)
+    {
+        if (_faultSession == _session) return;
+        _faultSession = _session;
+        try { _log?.Invoke($"⚠ Objekt-Bewegung: interner Fehler ({ex.GetType().Name}: {ex.Message}) – läuft weiter."); }
+        catch { /* logging must never break the frame loop */ }
     }
 
     /// <summary>Write <paramref name="off"/> into LastSent, pushed out to the eased
@@ -469,7 +743,7 @@ public sealed class LightChoreographer
         var v = l.V;
         double ph = v.Phase;
         int idx = (int)l.Index;
-        int n = Math.Max(1, _lights.Count);
+        int n = Math.Max(1, _leaders);   // satellites don't take part in spacing
         double ts = (tsess * _speedScale + _tsBias) * v.Speed;
 
         // Organic wander per axis (different seeds), scaled by amplitude.
@@ -528,14 +802,36 @@ public sealed class LightChoreographer
 
             case LightPattern.Beam:
             {
-                // Tight cluster directly overhead; a small ring widens the lit area.
-                double ang = ph + idx * (2 * Math.PI / n);
-                double ringR = 6 + 7 * idx;
+                if (n == 1)
+                {
+                    // Tight cluster directly overhead; a small ring widens the lit area.
+                    double ang1 = ph + idx * (2 * Math.PI / n);
+                    double ringR1 = 6 + 7 * idx;
+                    return new[]
+                    {
+                        ringR1 * Math.Cos(ang1) + 3 * wr,
+                        ringR1 * Math.Sin(ang1) + 3 * wf,
+                        BeamHeight + 2 * Math.Sin(ts * 0.3 + ph),
+                    };
+                }
+                // Centre light overhead, the others on slow rings turning in alternate
+                // directions; now and then one dips toward the canopy (never below 8 m).
+                double h = BeamHeight + 2 * Math.Sin(ts * 0.3 + ph);
+                if (idx == 0) return new[] { 3 * wr, 3 * wf, h };
+                double ang = ph + (idx - 1) * (2 * Math.PI / Math.Max(1, n - 1)) + ts * 0.25 * (idx % 2 == 0 ? -1 : 1);
+                double ringR = 8 + 4 * idx;
+                double dip = DipProfile(tp - l.DipStart);
+                if (dip > 0)
+                {
+                    double depth = Math.Max(0, Math.Min(Math.Max(0.5 * BeamHeight, 8), h - 8));
+                    h -= depth * dip;
+                    ringR *= 1 - 0.3 * dip;
+                }
                 return new[]
                 {
                     ringR * Math.Cos(ang) + 3 * wr,
                     ringR * Math.Sin(ang) + 3 * wf,
-                    BeamHeight + 2 * Math.Sin(ts * 0.3 + ph),
+                    h,
                 };
             }
 
@@ -667,4 +963,17 @@ public sealed class LightChoreographer
     }
 
     private static double Lerp(double a, double b, double u) => a + (b - a) * u;
+
+    private static double SmoothStep(double u) => !(u > 0) ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
+
+    private static double Norm(double[] v) => Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+
+    private static double Finite(double v, double fallback) => double.IsFinite(v) ? v : fallback;
+
+    private static bool IsFinite(double[] v) =>
+        double.IsFinite(v[0]) && double.IsFinite(v[1]) && double.IsFinite(v[2]);
+
+    private static bool IsFinite(in ObjectPose q) =>
+        double.IsFinite(q.Latitude) && double.IsFinite(q.Longitude) && double.IsFinite(q.AltitudeMsl)
+        && double.IsFinite(q.Pitch) && double.IsFinite(q.Bank) && double.IsFinite(q.Heading);
 }

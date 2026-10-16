@@ -7,7 +7,8 @@ namespace UfoEncounter.Audio;
 /// Multi-layer encounter audio. Each layer is a procedurally generated WAV
 /// (written to a temp file in the ctor) played through a WPF MediaPlayer, so we
 /// get real-time per-layer volume — used for distance-based loudness and for
-/// cueing sub-bass / static during phases. No external audio dependencies.
+/// cueing sub-bass / static during phases. The jumpscare may instead be a user
+/// file or the clip embedded at build time. No external audio dependencies.
 ///
 /// MUST be constructed and driven on the UI (Dispatcher) thread.
 /// </summary>
@@ -27,15 +28,13 @@ public sealed class AudioEngine : IDisposable
         OpenLoop(_subBass, "ufo_subbass.wav", WavSynth.SubBass());
         OpenLoop(_static, "ufo_static.wav", WavSynth.Static());
         OpenOnce(_whoosh, "ufo_whoosh.wav", WavSynth.Whoosh());
-        OpenOnce(_jumpscare, "ufo_jumpscare.wav", WavSynth.Jumpscare());
 
-        // Optional override: drop a 'jumpscare.wav' / '.mp3' / '.ogg' next to the
-        // exe to replace the synthesized scare with your own sound.
-        var custom = FindUserAudio("jumpscare");
-        if (custom != null)
-        {
-            try { _jumpscare.Open(new Uri(custom)); } catch { /* keep synth */ }
-        }
+        // Jumpscare, first one that opens wins: a 'jumpscare.wav' / '.mp3' / '.ogg'
+        // next to the exe (user override), the clip embedded at build time
+        // (MediaPlayer needs a file, so it is extracted), the synthesized cluster.
+        if (!TryOpen(_jumpscare, FindUserAudio("jumpscare"))
+            && !TryOpen(_jumpscare, ExtractEmbedded("jumpscare.mp3", "ufo_jumpscare.mp3")))
+            OpenOnce(_jumpscare, "ufo_jumpscare.wav", WavSynth.Jumpscare());
 
         foreach (var p in new[] { _drone, _subBass, _static, _whoosh, _jumpscare }) p.Volume = 0;
     }
@@ -48,6 +47,34 @@ public sealed class AudioEngine : IDisposable
             if (File.Exists(path)) return path;
         }
         return null;
+    }
+
+    /// <summary>Copies an embedded asset to the temp folder, kept between runs and
+    /// rewritten only if missing or of a different size. Null if the asset was not
+    /// built in (git-ignored file absent at build time) or the copy failed.</summary>
+    private static string? ExtractEmbedded(string asset, string name)
+    {
+        try
+        {
+            using var src = typeof(AudioEngine).Assembly
+                .GetManifestResourceStream("UfoEncounter.Assets." + asset);
+            if (src == null) return null;
+            var path = Path.Combine(Path.GetTempPath(), name);
+            var existing = new FileInfo(path);
+            if (!existing.Exists || existing.Length != src.Length)
+            {
+                using var dst = new FileStream(path, FileMode.Create, FileAccess.Write);
+                src.CopyTo(dst);
+            }
+            return path;
+        }
+        catch { /* fall back to the next source */ return null; }
+    }
+
+    private static bool TryOpen(MediaPlayer p, string? path)
+    {
+        if (path == null) return false;
+        try { p.Open(new Uri(path)); return true; } catch { return false; }
     }
 
     private void OpenLoop(MediaPlayer p, string name, short[] pcm)
@@ -90,12 +117,20 @@ public sealed class AudioEngine : IDisposable
         _whoosh.Play();
     }
 
-    /// <summary>Fire the one-shot high-frequency "jumpscare" cluster.</summary>
+    /// <summary>Fire the one-shot jumpscare (restarts from the beginning).</summary>
     public void PlayJumpscare(double v)
     {
         _jumpscare.Volume = Clamp(v);
         _jumpscare.Position = TimeSpan.Zero;
         _jumpscare.Play();
+    }
+
+    /// <summary>Cut a running jumpscare. <see cref="StopAll"/> leaves it alone so a
+    /// long clip can ring out past the end of a scene; a panic stop should not.</summary>
+    public void StopJumpscare()
+    {
+        _jumpscare.Volume = 0;
+        _jumpscare.Stop();
     }
 
     /// <summary>Snap every layer to silence immediately (the "sudden quiet").</summary>

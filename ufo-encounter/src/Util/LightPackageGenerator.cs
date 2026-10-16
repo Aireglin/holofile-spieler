@@ -10,12 +10,16 @@ namespace UfoEncounter.Util;
 /// Generates a light-only MSFS Community package — no Blender needed. Every
 /// variant is a plain SimObject (category SimpleObject) whose model is a tiny
 /// hand-written glTF:
-///  • "Licht" variants: no mesh at all, just a node carrying an ASOBO_street_light
+///  • "Licht" variants: no mesh at all, just nodes carrying an ASOBO_street_light
 ///    (the MSFS 2024 light extension; keys as written by Asobo's exporter) —
 ///    a glowing point with lens flare that can also light up the aircraft.
-///  • "Kugel" variants: a small emissive sphere plus the same light, for orbs that
-///    stay visible in daylight.
-///  • One diagnostic variant with the older ASOBO_macro_light (MSFS 2020 format).
+///    Ruhig/Puls/Blitz have one light; Glimmen/Funkeln stack a steady base and
+///    flare-only overlays at the same point, so they sparkle but never go dark.
+///  • "Funke" variants: the same idea, small and dim (satellites).
+///  • "Kugel"/"Kern" variants: an emissive sphere plus lights, for orbs that
+///    stay visible in daylight (Kern = big and bright).
+///  • Diagnostic variants ("Test_"): the older ASOBO_macro_light (MSFS 2020 format),
+///    node offsets, flash_phase unit and flare_only visibility.
 /// The mesh-less glTF + ModelInfo/LODS XML structure mirrors files that ship in
 /// production packages (e.g. FlyByWire's model.aic/empty.gltf).
 /// </summary>
@@ -29,12 +33,29 @@ public static class LightPackageGenerator
     // Copy of the default options (keeps its TypeInfoResolver) with indentation.
     private static readonly JsonSerializerOptions Indented = new(JsonSerializerOptions.Default) { WriteIndented = true };
 
-    public enum Style { Steady, Pulse, Strobe }
+    /// <summary>Role of a variant: Steady/Soft/Hard are the mesh-less "Licht" titles,
+    /// Orb = Kugel, Core = Kern, Spark = Funke.</summary>
+    public enum LightKind { Steady, Soft, Hard, Orb, Core, Spark, Diagnostic }
 
-    public sealed record Variant(string Title, string Model, double[] Color, Style Style, bool Orb, bool MacroLight);
+    /// <summary>One light node: candela at night/day, flashes per MINUTE (0 = steady),
+    /// flash duration in seconds, optional node translation in metres (glTF axes).</summary>
+    public sealed record LightSpec(double[] Color, double NightCd, double DayCd,
+        double FlashPerMin = 0, double FlashSec = 0.2, double FlashPhase = 0,
+        bool RandomPhase = true, bool FlareOnly = false, double[]? Translation = null);
 
+    /// <summary>One SimObject title. ColorName is "" for diagnostics; OrbRadius 0 = no mesh.</summary>
+    public sealed record Variant(string Title, string Model, string ColorName, string StyleName, LightKind Kind,
+        IReadOnlyList<LightSpec> Lights, double[] Color, double OrbRadius = 0, double EmissiveStrength = 0,
+        bool MacroLight = false)
+    {
+        public bool Orb => OrbRadius > 0;
+    }
+
+    /// <summary>LightTitles = UFOE_Licht_* (Ruhig, Glimmen, Funkeln, Puls, Blitz); the
+    /// other kinds have their own lists. DiagnosticTitles[0] is the macro-light test.</summary>
     public sealed record Result(string PackagePath, IReadOnlyList<string> LightTitles,
-        IReadOnlyList<string> OrbTitles, IReadOnlyList<string> DiagnosticTitles);
+        IReadOnlyList<string> OrbTitles, IReadOnlyList<string> DiagnosticTitles,
+        IReadOnlyList<string> CoreTitles, IReadOnlyList<string> SparkTitles);
 
     private static readonly (string Name, double[] Rgb)[] Colors =
     {
@@ -47,22 +68,101 @@ public static class LightPackageGenerator
         ("Cyan", new[] { 0.2, 0.95, 1.0 }),
     };
 
+    public static IReadOnlyList<string> ColorNames { get; } = Colors.Select(c => c.Name).ToArray();
+
+    // Spark rhythm per colour (flashes/min, s): primes, so no two colours share a beat.
+    private static readonly double[] SparkFreq = { 97, 101, 103, 107, 109, 113, 127 };
+    private static readonly double[] SparkDur = { 0.06, 0.05, 0.07, 0.055, 0.08, 0.065, 0.075 };
+
+    // Must stay below the tables above: static initializers run in textual order.
     public static IReadOnlyList<Variant> Variants { get; } = BuildVariants();
+
+    private static readonly Dictionary<string, Variant> ByTitle =
+        Variants.ToDictionary(v => v.Title, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Case-insensitive lookup of a generated title; null if it is not ours.</summary>
+    public static Variant? Find(string? title) =>
+        title is null ? null : ByTitle.GetValueOrDefault(title.Trim());
+
+    /// <summary>Titles of the given kinds, in package order.</summary>
+    public static IReadOnlyList<string> TitlesOf(params LightKind[] kinds) =>
+        Variants.Where(v => kinds.Contains(v.Kind)).Select(v => v.Title).ToList();
 
     private static List<Variant> BuildVariants()
     {
         var list = new List<Variant>();
         foreach (var (name, rgb) in Colors)
         {
-            list.Add(new($"{TitlePrefix}Licht_{name}_Ruhig", $"Licht_{name}_Ruhig", rgb, Style.Steady, false, false));
-            list.Add(new($"{TitlePrefix}Licht_{name}_Puls", $"Licht_{name}_Puls", rgb, Style.Pulse, false, false));
-            list.Add(new($"{TitlePrefix}Licht_{name}_Blitz", $"Licht_{name}_Blitz", rgb, Style.Strobe, false, false));
+            list.Add(Licht(name, "Ruhig", LightKind.Steady, rgb, new LightSpec(rgb, 20000, 60000)));
+            // Soft: steady base plus whitish flare-only glints at the same point. Random
+            // phase and incommensurate rates keep them irregular and out of sync.
+            list.Add(Licht(name, "Glimmen", LightKind.Soft, rgb,
+                new LightSpec(rgb, 8000, 24000),
+                Overlay(Whiten(rgb, 0.4), 16000, 48000, 30, 0.6)));
+            list.Add(Licht(name, "Funkeln", LightKind.Soft, rgb,
+                new LightSpec(rgb, 9000, 27000),
+                Overlay(Whiten(rgb, 0.5), 6000, 18000, 37, 0.10),
+                Overlay(Whiten(rgb, 0.5), 5000, 15000, 53, 0.07)));
+            // Hard: the single light blinks fully off.
+            list.Add(Licht(name, "Puls", LightKind.Hard, rgb, new LightSpec(rgb, 20000, 60000, 48, 0.55)));
+            list.Add(Licht(name, "Blitz", LightKind.Hard, rgb, new LightSpec(rgb, 20000, 60000, 60, 0.08)));
         }
         foreach (var (name, rgb) in Colors.Take(4))
-            list.Add(new($"{TitlePrefix}Kugel_{name}", $"Kugel_{name}", rgb, Style.Steady, true, false));
-        list.Add(new($"{TitlePrefix}Test_Macro_Weiss", "Test_Macro_Weiss", Colors[0].Rgb, Style.Steady, false, true));
+            list.Add(new($"{TitlePrefix}Kugel_{name}", $"Kugel_{name}", name, "Kugel", LightKind.Orb,
+                new[] { new LightSpec(rgb, 20000, 60000) }, rgb, OrbRadius: 0.6, EmissiveStrength: 40));
+        foreach (var (name, rgb) in Colors)
+            list.Add(new($"{TitlePrefix}Kern_{name}", $"Kern_{name}", name, "Kern", LightKind.Core,
+                new[] { new LightSpec(rgb, 50000, 150000), Overlay(Whiten(rgb, 0.5), 40000, 120000, 8, 1.0) },
+                rgb, OrbRadius: 1.3, EmissiveStrength: 60));
+        for (int i = 0; i < Colors.Length; i++)
+        {
+            // Small and dim: the base barely lights anything, the glints are flare-only.
+            var (name, rgb) = Colors[i];
+            double f = SparkFreq[i], d = SparkDur[i];
+            var glint = Whiten(rgb, 0.5);
+            list.Add(Funke(name, "Glimmen", rgb, new LightSpec(rgb, 1500, 5000),
+                Overlay(Whiten(rgb, 0.4), 4000, 12000, Math.Round(f * 0.4, 1), 0.5)));
+            list.Add(Funke(name, "Funkeln", rgb, new LightSpec(rgb, 1500, 5000),
+                Overlay(glint, 5000, 15000, Math.Round(f * 0.37, 1), d),
+                Overlay(glint, 4000, 12000, Math.Round(f * 0.61, 1), Math.Round(d * 0.8, 3))));
+            list.Add(Funke(name, "Blitz", rgb, new LightSpec(rgb, 800, 2500),
+                Overlay(glint, 6000, 18000, f, d)));
+        }
+
+        // Diagnostics: fixed phase (no random_phase), for one night test in the sim.
+        double[] white = Rgb("Weiss"), red = Rgb("Rot"), green = Rgb("Gruen"), blue = Rgb("Blau");
+        list.Add(new($"{TitlePrefix}Test_Macro_Weiss", "Test_Macro_Weiss", "", "Macro_Weiss", LightKind.Diagnostic,
+            new[] { new LightSpec(white, 30, 0) }, white, MacroLight: true));
+        list.Add(Test("Versatz", white,
+            Fixed(red, -4, 0, 0), Fixed(green, 4, 0, 0), Fixed(white, 0, 4, 0)));
+        // A chase around the square, phases in seconds (period 4 s) vs. fractions of the
+        // period: whichever of the two runs as an even chase reveals the unit.
+        double[][] chase = { red, green, blue, white };
+        double[][] corners = { new[] { 2.0, 0, 2 }, new[] { 2.0, 0, -2 }, new[] { -2.0, 0, -2 }, new[] { -2.0, 0, 2 } };
+        list.Add(Test("Phase_Sek", white, Enumerable.Range(0, 4).Select(k =>
+            new LightSpec(chase[k], 20000, 60000, 15, 0.6, k, RandomPhase: false, Translation: corners[k])).ToArray()));
+        list.Add(Test("Phase_Anteil", white, Enumerable.Range(0, 4).Select(k =>
+            new LightSpec(chase[k], 20000, 60000, 15, 0.6, k * 0.25, RandomPhase: false, Translation: corners[k])).ToArray()));
+        list.Add(Test("FlareOnly", white, new LightSpec(white, 20000, 60000, RandomPhase: false, FlareOnly: true)));
         return list;
+
+        static Variant Licht(string color, string style, LightKind kind, double[] rgb, params LightSpec[] lights) =>
+            new($"{TitlePrefix}Licht_{color}_{style}", $"Licht_{color}_{style}", color, style, kind, lights, rgb);
+        static Variant Funke(string color, string style, double[] rgb, params LightSpec[] lights) =>
+            new($"{TitlePrefix}Funke_{color}_{style}", $"Funke_{color}_{style}", color, style, LightKind.Spark, lights, rgb);
+        static Variant Test(string name, double[] rgb, params LightSpec[] lights) =>
+            new($"{TitlePrefix}Test_{name}", $"Test_{name}", "", name, LightKind.Diagnostic, lights, rgb);
+        static LightSpec Overlay(double[] rgb, double night, double day, double perMin, double sec) =>
+            new(rgb, night, day, perMin, sec, FlareOnly: true);
+        static LightSpec Fixed(double[] rgb, double x, double y, double z) =>
+            new(rgb, 20000, 60000, RandomPhase: false, Translation: new[] { x, y, z });
     }
+
+    private static double[] Rgb(string colorName) => Colors.First(c => c.Name == colorName).Rgb;
+
+    /// <summary>Blend a colour towards white (share 0..1), rounded for tidy JSON.</summary>
+    private static double[] Whiten(double[] c, double share) =>
+        c.Select(x => Math.Round(x * (1 - share) + share, 3)).ToArray();
 
     /// <summary>Find the MSFS 2024 Community folder via UserCfg.opt
     /// (InstalledPackagesPath), for the Steam and the Microsoft Store edition.</summary>
@@ -139,7 +239,7 @@ public static class LightPackageGenerator
 
             if (v.Orb)
             {
-                byte[] bin = BuildSphereBin(0.6, out int vertexCount, out int indexCount, out double radius);
+                byte[] bin = BuildSphereBin(v.OrbRadius, out int vertexCount, out int indexCount, out double radius);
                 File.WriteAllBytes(Path.Combine(modelDir, "UFOE_Light.bin"), bin);
                 WriteText(Path.Combine(modelDir, "UFOE_Light.gltf"), OrbGltf(v, bin.Length, vertexCount, indexCount, radius));
             }
@@ -154,34 +254,67 @@ public static class LightPackageGenerator
         WriteManifest(root, total);
 
         return new Result(root,
-            Variants.Where(v => !v.Orb && !v.MacroLight).Select(v => v.Title).ToList(),
-            Variants.Where(v => v.Orb).Select(v => v.Title).ToList(),
-            Variants.Where(v => v.MacroLight).Select(v => v.Title).ToList());
+            TitlesOf(LightKind.Steady, LightKind.Soft, LightKind.Hard),
+            TitlesOf(LightKind.Orb),
+            TitlesOf(LightKind.Diagnostic),
+            TitlesOf(LightKind.Core),
+            TitlesOf(LightKind.Spark));
+    }
+
+    /// <summary>Titles in the installed package's sim.cfg (case-insensitive), or null
+    /// if the package or its sim.cfg is missing or unreadable. Never throws.</summary>
+    public static IReadOnlySet<string>? ReadInstalledTitles(string communityFolder)
+    {
+        try
+        {
+            string cfg = Path.Combine(communityFolder, PackageFolderName,
+                SimObjectDir.Replace('/', Path.DirectorySeparatorChar), "sim.cfg");
+            if (!File.Exists(cfg)) return null;
+            var titles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in File.ReadLines(cfg))
+            {
+                var t = line.Trim();
+                int eq = t.IndexOf('=');
+                if (eq < 0 || !t[..eq].Trim().Equals("title", StringComparison.OrdinalIgnoreCase)) continue;
+                var value = t[(eq + 1)..].Trim();
+                if (value.StartsWith('"'))
+                {
+                    int close = value.IndexOf('"', 1);
+                    value = close > 0 ? value[1..close] : value[1..];
+                }
+                else
+                {
+                    int comment = value.IndexOf(';');
+                    if (comment >= 0) value = value[..comment];
+                }
+                value = value.Trim();
+                if (value.Length > 0) titles.Add(value);
+            }
+            return titles;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     // ---------------- glTF writers ----------------
 
-    private static JsonObject LightExtension(Variant v)
+    private static JsonObject LightExtension(LightSpec s, bool macro)
     {
-        var (freq, dur) = v.Style switch
-        {
-            Style.Pulse => (48.0, 0.55),   // flashes per MINUTE, seconds
-            Style.Strobe => (60.0, 0.08),
-            _ => (0.0, 0.2),
-        };
-        if (v.MacroLight)
+        if (macro)
         {
             return new JsonObject
             {
                 ["ASOBO_macro_light"] = new JsonObject
                 {
-                    ["color"] = Arr(v.Color),
-                    ["intensity"] = 30.0,
+                    ["color"] = Arr(s.Color),
+                    ["intensity"] = s.NightCd,
                     ["cone_angle"] = 360.0,
                     ["has_symmetry"] = false,
-                    ["flash_frequency"] = freq,
-                    ["flash_duration"] = dur,
-                    ["flash_phase"] = 0.0,
+                    ["flash_frequency"] = s.FlashPerMin,
+                    ["flash_duration"] = s.FlashSec,
+                    ["flash_phase"] = s.FlashPhase,
                     ["rotation_speed"] = 0.0,
                     ["day_night_cycle"] = false,
                 },
@@ -191,29 +324,47 @@ public static class LightPackageGenerator
         {
             ["ASOBO_street_light"] = new JsonObject
             {
-                ["color"] = Arr(v.Color),
-                ["intensity"] = 20000.0,          // candela at night
-                ["daytime_intensity"] = 60000.0,  // used because day_night_cycle = false
+                ["color"] = Arr(s.Color),
+                ["intensity"] = s.NightCd,          // candela at night
+                ["daytime_intensity"] = s.DayCd,    // used because day_night_cycle = false
                 ["day_night_cycle"] = false,
                 ["cone_angle"] = 360.0,
                 ["has_symmetry"] = false,
-                ["flash_frequency"] = freq,
-                ["flash_duration"] = dur,
-                ["flash_phase"] = 0.0,
+                ["flash_frequency"] = s.FlashPerMin,
+                ["flash_duration"] = s.FlashSec,
+                ["flash_phase"] = s.FlashPhase,
                 ["rotation_phase"] = 0.0,
                 ["rotation_speed"] = 0.0,
-                ["random_phase"] = true,
-                ["flare_enabled"] = true,
-                ["flare_only"] = false,
+                ["random_phase"] = s.RandomPhase,
+                ["flare_enabled"] = true,           // in the air only the flare is visible
+                ["flare_only"] = s.FlareOnly,
             },
         };
     }
 
-    private static JsonObject LightNode(Variant v)
+    /// <summary>One node per light: "UfoLight", "UfoLight1", ... (names double as unique ids).</summary>
+    private static IEnumerable<JsonObject> LightNodes(Variant v) =>
+        v.Lights.Select((s, i) =>
+        {
+            string name = i == 0 ? "UfoLight" : $"UfoLight{i}";
+            var ext = LightExtension(s, v.MacroLight);
+            ext["ASOBO_unique_id"] = new JsonObject { ["id"] = name };
+            var node = new JsonObject { ["name"] = name };
+            if (s.Translation is { } t) node["translation"] = Arr(t);
+            node["extensions"] = ext;
+            return node;
+        });
+
+    private static JsonObject RootNode(int childCount)
     {
-        var ext = LightExtension(v);
-        ext["ASOBO_unique_id"] = new JsonObject { ["id"] = "UfoLight" };
-        return new JsonObject { ["name"] = "UfoLight", ["extensions"] = ext };
+        var children = new JsonArray();
+        for (int i = 1; i <= childCount; i++) children.Add(JsonValue.Create(i));
+        return new JsonObject
+        {
+            ["name"] = "Root",
+            ["children"] = children,
+            ["extensions"] = new JsonObject { ["ASOBO_unique_id"] = new JsonObject { ["id"] = "Root" } },
+        };
     }
 
     private static JsonObject Asset(bool optimized)
@@ -229,20 +380,13 @@ public static class LightPackageGenerator
     private static string LightGltf(Variant v)
     {
         string lightExt = v.MacroLight ? "ASOBO_macro_light" : "ASOBO_street_light";
+        var nodes = new JsonArray { RootNode(v.Lights.Count) };
+        foreach (var n in LightNodes(v)) nodes.Add(n);
         var doc = new JsonObject
         {
             ["asset"] = Asset(optimized: true),
             ["extensionsUsed"] = Arr("ASOBO_normal_map_convention", "ASOBO_unique_id", "ASOBO_asset_optimized", lightExt),
-            ["nodes"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["name"] = "Root",
-                    ["children"] = new JsonArray(1),
-                    ["extensions"] = new JsonObject { ["ASOBO_unique_id"] = new JsonObject { ["id"] = "Root" } },
-                },
-                LightNode(v),
-            },
+            ["nodes"] = nodes,
             ["scene"] = 0,
             ["scenes"] = new JsonArray { new JsonObject { ["name"] = "Scene", ["nodes"] = new JsonArray(0) } },
         };
@@ -253,26 +397,23 @@ public static class LightPackageGenerator
     {
         int posBytes = vertexCount * 12;
         int idxBytes = indexCount * 2;
+        // The mesh node stays at index 1; the light nodes follow from index 2.
+        var nodes = new JsonArray
+        {
+            RootNode(1 + v.Lights.Count),
+            new JsonObject
+            {
+                ["name"] = "Orb",
+                ["mesh"] = 0,
+                ["extensions"] = new JsonObject { ["ASOBO_unique_id"] = new JsonObject { ["id"] = "Orb" } },
+            },
+        };
+        foreach (var n in LightNodes(v)) nodes.Add(n);
         var doc = new JsonObject
         {
             ["asset"] = Asset(optimized: false),
             ["extensionsUsed"] = Arr("ASOBO_normal_map_convention", "ASOBO_unique_id", "ASOBO_street_light", "KHR_materials_emissive_strength"),
-            ["nodes"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["name"] = "Root",
-                    ["children"] = new JsonArray(1, 2),
-                    ["extensions"] = new JsonObject { ["ASOBO_unique_id"] = new JsonObject { ["id"] = "Root" } },
-                },
-                new JsonObject
-                {
-                    ["name"] = "Orb",
-                    ["mesh"] = 0,
-                    ["extensions"] = new JsonObject { ["ASOBO_unique_id"] = new JsonObject { ["id"] = "Orb" } },
-                },
-                LightNode(v),
-            },
+            ["nodes"] = nodes,
             ["meshes"] = new JsonArray
             {
                 new JsonObject
@@ -303,7 +444,7 @@ public static class LightPackageGenerator
                     ["emissiveFactor"] = Arr(v.Color),
                     ["extensions"] = new JsonObject
                     {
-                        ["KHR_materials_emissive_strength"] = new JsonObject { ["emissiveStrength"] = 40.0 },
+                        ["KHR_materials_emissive_strength"] = new JsonObject { ["emissiveStrength"] = v.EmissiveStrength },
                     },
                 },
             },

@@ -304,22 +304,37 @@ public partial class MainWindow : Window
     private void TestMothership_Click(object sender, RoutedEventArgs e) =>
         _director?.TestLights(LightPattern.Mothership, 20, mothership: true);
 
+    private async void RunDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        if (_director == null) return;
+        UpdatePackageInfo();   // pick up a package generated meanwhile
+        await _director.RunDiagnosticsAsync();
+    }
+
     private string? ResolveCommunityFolder() =>
         LightPackageGenerator.DetectCommunityFolder()
         ?? (_communityFolder.Length > 0 && Directory.Exists(_communityFolder) ? _communityFolder : null);
 
+    // A title that only packages with the new light styles (Glimmen/Funkeln, Kern, Funke) contain.
+    private const string NewStylesMarker = LightPackageGenerator.TitlePrefix + "Licht_Weiss_Glimmen";
+
+    /// <summary>Show the package state and hand its titles to the director (the mix
+    /// only uses package titles that are installed).</summary>
     private void UpdatePackageInfo()
     {
         string? community = ResolveCommunityFolder();
+        var installed = community == null ? null : LightPackageGenerator.ReadInstalledTitles(community);
+        if (_director != null) _director.InstalledTitles = installed;
         if (community == null)
         {
             PackageInfo.Text = "Community-Ordner nicht automatisch gefunden – beim Erzeugen wirst du danach gefragt.";
             return;
         }
         string pkg = Path.Combine(community, LightPackageGenerator.PackageFolderName);
-        PackageInfo.Text = Directory.Exists(pkg)
-            ? $"Installiert: {pkg}"
-            : $"Noch nicht erzeugt. Ziel: {community}";
+        if (!Directory.Exists(pkg)) PackageInfo.Text = $"Noch nicht erzeugt. Ziel: {community}";
+        else if (installed == null) PackageInfo.Text = $"Installiert: {pkg} – nicht lesbar, bitte neu erzeugen";
+        else if (installed.Contains(NewStylesMarker)) PackageInfo.Text = $"Installiert: {pkg} – neue Lichtstile vorhanden";
+        else PackageInfo.Text = $"Installiert: {pkg} – bitte neu erzeugen (ältere Version)";
     }
 
     private void GeneratePackage_Click(object sender, RoutedEventArgs e)
@@ -343,16 +358,24 @@ public partial class MainWindow : Window
                 SaveSettings();
             }
             UpdatePackageInfo();
-            Trace($"Licht-Paket erzeugt: {r.PackagePath} ({r.LightTitles.Count} Lichter, {r.OrbTitles.Count} Kugeln).");
+            Trace($"Licht-Paket erzeugt: {r.PackagePath} ({r.LightTitles.Count} Lichter, {r.OrbTitles.Count} Kugeln, "
+                  + $"{r.CoreTitles.Count} Kerne, {r.SparkTitles.Count} Funken).");
             var answer = MessageBox.Show(this,
                 "Das Licht-Paket wurde erzeugt:\n" + r.PackagePath +
                 "\n\nWICHTIG: MSFS jetzt neu starten – Pakete werden nur beim Start geladen.\n\n" +
                 "Soll der Titel für „Lichter / kleine UFOs“ auf die neuen Lichtobjekte gesetzt werden?\n" +
-                "(alle Farben, ruhig / pulsierend / blitzend – jedes Objekt zufällig gemischt)",
+                "(ein Titel pro Farbe – das Programm mischt ruhige, glimmende, funkelnde und blinkende Lichter, " +
+                "Kerne und Funken automatisch; „Lichtstile automatisch mischen“ wird eingeschaltet)",
                 "Licht-Paket erzeugt", MessageBoxButton.YesNo, MessageBoxImage.Information);
-            if (answer == MessageBoxResult.Yes) LightTitleBox.Text = string.Join(", ", r.LightTitles);
+            if (answer == MessageBoxResult.Yes)
+            {
+                // One steady title per colour: the colours are the user's choice, the styles come from the mix.
+                LightTitleBox.Text = string.Join(", ", LightPackageGenerator.TitlesOf(LightPackageGenerator.LightKind.Steady));
+                AutoMixChk.IsChecked = true;
+            }
             Trace("Test nach dem MSFS-Neustart: Tab „Objekte & Lichter“ → Muster testen (nachts sieht man es am besten). "
-                  + $"Erscheint nichts, einzeln probieren: „{r.OrbTitles[0]}“ (leuchtende Kugel) und „{r.DiagnosticTitles[0]}“ (älteres Lichtformat).");
+                  + "Bitte auch einmal „▶ Diagnose (Test-Objekte)“ starten und melden, was du siehst. "
+                  + $"Erscheint gar nichts: „Lichtstile automatisch mischen“ ausschalten und einzeln „{r.OrbTitles[0]}“ (leuchtende Kugel) eintragen.");
         }
         catch (Exception ex)
         {
@@ -440,6 +463,8 @@ public partial class MainWindow : Window
         MaxDurVal.Text = $"{MaxDurSlider.Value:0} s";
         DreadVal.Text = Pct(DreadSlider.Value);
         AglVal.Text = $"{AglSlider.Value:0} ft";
+        BlinkShareVal.Text = Pct(BlinkShareSlider.Value);
+        SatChanceVal.Text = Pct(SatChanceSlider.Value);
     }
 
     private void PushSettingsToDirector()
@@ -467,6 +492,10 @@ public partial class MainWindow : Window
         _director.LightCount = (int)LightCountSlider.Value;
         _director.SpeedScale = SpeedSlider.Value;
         _director.MinDistanceMeters = MinDistSlider.Value;
+        _director.BlinkShare = BlinkShareSlider.Value;
+        _director.SatelliteChance = SatChanceSlider.Value;
+        _director.AutoMix = AutoMixChk.IsChecked == true;
+        _director.TestWithSatellites = TestSatChk.IsChecked == true;
         _director.ApplyLiveTestTuning();
         _director.BeamTitle = BeamTitleBox.Text;
         _director.BeamCount = (int)BeamCountSlider.Value;
@@ -476,7 +505,7 @@ public partial class MainWindow : Window
     }
 
     private void ApplyPreset(double freq, double minDur, double maxDur, double intensity, double dread,
-        double disrupt, int count, double minDist, double speed)
+        double disrupt, int count, double minDist, double speed, double blink)
     {
         FreqSlider.Value = freq;
         MinDurSlider.Value = minDur;
@@ -487,15 +516,16 @@ public partial class MainWindow : Window
         LightCountSlider.Value = count;
         MinDistSlider.Value = minDist;
         SpeedSlider.Value = speed;
+        BlinkShareSlider.Value = blink;
         MultiPhaseChk.IsChecked = true;
         Trace("Voreinstellung übernommen. Häufigkeit und Ausfallchance gelten auch für den Zufallsmodus; "
-              + "Anzahl, Abstand, Tempo und Dread gelten für Buttons und Tests (der Zufallsmodus würfelt sie je Begegnung neu). "
+              + "Anzahl, Abstand, Tempo, Dread und Blink-Anteil gelten für Buttons und Tests (der Zufallsmodus würfelt sie je Begegnung neu). "
               + "Mehrphasen-Modus ist an.");
     }
 
-    private void PresetGentle_Click(object sender, RoutedEventArgs e) => ApplyPreset(0.5, 6, 14, 0.45, 0.2, 0.3, 2, 400, 0.5);
-    private void PresetStandard_Click(object sender, RoutedEventArgs e) => ApplyPreset(1.0, 4, 12, 0.6, 0.4, 0.75, 2, 200, 0.6);
-    private void PresetMax_Click(object sender, RoutedEventArgs e) => ApplyPreset(2.0, 6, 20, 0.85, 0.85, 0.9, 4, 120, 0.75);
+    private void PresetGentle_Click(object sender, RoutedEventArgs e) => ApplyPreset(0.5, 6, 14, 0.45, 0.2, 0.3, 2, 400, 0.5, 0.15);
+    private void PresetStandard_Click(object sender, RoutedEventArgs e) => ApplyPreset(1.0, 4, 12, 0.6, 0.4, 0.75, 2, 200, 0.6, 0.3);
+    private void PresetMax_Click(object sender, RoutedEventArgs e) => ApplyPreset(2.0, 6, 20, 0.85, 0.85, 0.9, 4, 120, 0.75, 0.5);
 
     private void ApplySeed_Click(object sender, RoutedEventArgs e)
     {
@@ -536,6 +566,8 @@ public partial class MainWindow : Window
         SpeedSlider.Value = s.SpeedScale;
         BeamCountSlider.Value = s.BeamCount;
         BeamHeightSlider.Value = s.BeamHeight;
+        BlinkShareSlider.Value = s.BlinkShare;
+        SatChanceSlider.Value = s.SatelliteChance;
 
         MultiPhaseChk.IsChecked = s.MultiPhase;
         DayNightChk.IsChecked = s.DayNight;
@@ -544,12 +576,14 @@ public partial class MainWindow : Window
         LightsChk.IsChecked = s.LightsEnabled;
         AircraftLightsChk.IsChecked = s.AircraftLights;
         TopmostChk.IsChecked = s.Topmost;
+        AutoMixChk.IsChecked = s.AutoMix;
+        TestSatChk.IsChecked = s.TestWithSatellites;
         ElecModeCombo.SelectedIndex = s.ElecMode >= 0 ? Math.Min(s.ElecMode, 2) : (s.FullShutdown ? 2 : s.EngineCut ? 1 : 0);
 
         LightTitleBox.Text = s.LightTitle;
         MothershipTitleBox.Text = s.MothershipTitle;
         BeamTitleBox.Text = s.BeamTitle;
-        JetTitleBox.Text = s.JetTitle;
+        JetTitleBox.Text = string.IsNullOrWhiteSpace(s.JetTitle) ? EncounterDirector.DefaultJetTitle : s.JetTitle;
 
         Tabs.SelectedIndex = Math.Clamp(s.SelectedTab, 0, Tabs.Items.Count - 1);
         RestoreWindowPlacement(s);
@@ -595,6 +629,10 @@ public partial class MainWindow : Window
             SpeedScale = SpeedSlider.Value,
             BeamCount = (int)BeamCountSlider.Value,
             BeamHeight = BeamHeightSlider.Value,
+            BlinkShare = BlinkShareSlider.Value,
+            SatelliteChance = SatChanceSlider.Value,
+            AutoMix = AutoMixChk.IsChecked == true,
+            TestWithSatellites = TestSatChk.IsChecked == true,
             MultiPhase = MultiPhaseChk.IsChecked == true,
             DayNight = DayNightChk.IsChecked == true,
             Whoosh = WhooshChk.IsChecked == true,
